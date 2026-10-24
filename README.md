@@ -71,12 +71,16 @@ Opening a ride shows its crowding segment by segment and, under "Profile of trav
 who travels on it.
 
 The **profile** button (top right) describes the traveller: age, student status, travelcards, zone subscriptions (whose
-zones you pick on the map) and the minimum transfer time. It is kept in the browser.
+zones you pick on the map) and the minimum transfer time. A student is also asked where they live and study (an
+address or a stop), for the discounts restricted to the people of a network's area. The profile is kept in the browser;
+the two places are sent with each search, and only for a student.
 
 The **fares** button (the tag, under the profile) opens the price editor:
 
 - **Discounts**: a share off the tickets, for an age range, for students only (or non-students only), on all networks
-  or on some of them. When several apply to a ticket, the largest one is taken; they don't add up. They come on top of
+  or on some of them, and optionally only for the people living or studying in the network's area (for example a
+  student discount of Unireso for those who live or study in its zones). Such a discount only applies to the tickets
+  of zone networks, never to SBB or distance-based ones. When several apply to a ticket, the largest one is taken; they don't add up. They come on top of
   the half-fare card, and free travel (GA, under 6, Junior card, Gleis 7) stays free. The age discounts of the fare
   description (in Unireso, free under 19) are listed here too, and can be changed or removed.
 - **Fare networks**: the price list of a network by number of zones, full price and half-fare (or, for Unireso, the
@@ -109,7 +113,8 @@ The page only calls the API, and you can call it too. Its full description is at
     stop: the longer of the two is used.
   - `optimize=cost` (the default) or `optimize=time`: see [How a journey is found](#how-a-journey-is-found).
   - The traveller is described by the same parameters as in the trips CSV: `age`, `student`, `halbtax`, `ga`,
-    `verbund_abo`... and `subscriptions`, for example `subscriptions=ZVV:110,121;Mobilis:all`.
+    `verbund_abo`... and `subscriptions`, for example `subscriptions=ZVV:110,121;Mobilis:all`. `home` and `study`
+    (`lat,lon`) are where they live and study.
   - `fares` changes the fares for this search: a JSON object with some of the parts of `/api/fares` (`sbb`, `default`,
     single networks of `networks`, `discounts`), each given whole. The page sends its changes this way.
 - `GET /api/stations?q=lausanne`: stations by name. Stops with the same name within 1 km of each other count as one
@@ -139,7 +144,8 @@ python route_trips.py --date 20260318 --trips examples/trips.csv --out results
 
 Each row of the CSV is a trip: an `id`, a `departure` time (HH:MM), and either the coordinates of its origin and
 destination (`origin_lat`, `origin_lon`, `destination_lat`, `destination_lon`) or their stops (`origin_stop`,
-`destination_stop`). Optional columns describe the traveller (`age`, `student`, `halbtax`, `ga`, `subscriptions`...), stops on
+`destination_stop`). Optional columns describe the traveller (`age`, `student`, `halbtax`, `ga`, `subscriptions`, `home_lat` and
+`home_lon`, `study_lat` and `study_lon`...), stops on
 the way (`via`) and a `date`. See `examples/trips.csv` and the top of `route_trips.py` for the full list.
 
 The script writes two files:
@@ -171,7 +177,7 @@ running that day, which takes 0.2 s. A search takes milliseconds with numba inst
 ### How a journey is found
 
 A GTFS timetable is, in the end, a long list of **connections**: a vehicle leaving one stop at a given time and
-arriving at the next one. To find a journey, the router (`gtfs_router/csa.py`) uses the **Connection Scan Algorithm**:
+arriving at the next one. To find a journey, the router (`gtfs_router/csa.py`) uses the **Connection Scan Algorithm** ([Dibbelt et al.](https://arxiv.org/pdf/1703.05997)):
 it goes through the connections of the day in order of departure, and keeps track of the best way found so far to
 reach each stop.
 
@@ -248,7 +254,10 @@ The price of a journey is found in four steps:
    - Free: with a GA, under 6, under 16 with the Junior card, with Gleis 7 (under 25, between 19:00 and 05:00), and
      with a local subscription when the origin and destination are within 10 km of home.
    - Half fare: with the half-fare card, or under 16.
-   - Discounts (`Discount`): a share off the ticket of a network, for an age range and/or students (`Traveller.student`).
+   - Discounts (`Discount`): a share off the ticket of a network, for an age range and/or students (`Traveller.student`),
+     and optionally only for its residents (`residents`): the traveller lives (`Traveller.home`) or studies
+     (`Traveller.study`) inside one of the network's zone polygons, or, without them, within 1 km of one of its stops
+     (`RESIDENT_RADIUS_M`).
      The largest discount that applies to a network's ticket is taken, after the half fare. The `<targetedPricing>`
      of the fare description are discounts too (Unireso: 100 % off from 0 to 18).
    - 1st class (`first_class`): each price is multiplied by 1.7 before rounding, as in the [SBB tariff](https://www.allianceswisspass.ch/de/tarife-vorschriften/uebersicht). In the zone

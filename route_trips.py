@@ -1,13 +1,27 @@
-"""Routes a list of trips on a GTFS feed and prices them.
+"""Finds and prices the journey of every trip of a CSV file.
 
-    python route_trips.py --gtfs gtfs_fp2026_20251214.zip --date 20260318 --trips examples/trips.csv --out results
+    python route_trips.py --date 20260318 --trips examples/trips.csv --out results
 
-The trips CSV has the columns id, departure (HH:MM), optionally date (YYYYMMDD or YYYY-MM-DD, else --date) and either origin_lat, origin_lon, destination_lat,
-destination_lon, or origin_stop, destination_stop (GTFS stop ids or station codes, e.g. 8501120), and optionally the
-traveller: age, halbtax, ga, verbund_abo, strecken_abo, gleis7_abo, junior_abo, first_class, student (true/false), home_lat, home_lon, subscriptions (zones,
-e.g. "ZVV:110,121;Mobilis:all"), via (places to go through, separated by ";": stop ids or "lat,lon", with @minutes to stay there, e.g. 8507000@30). Writes
-<out>/journeys.csv (one row per trip: times, number of changes, price) and <out>/legs.csv (one row per leg). With
---crowding <MATSim output folder>: the crowding of the rides (level 1 to 3, load, occupancy of the busiest segment).
+The timetable, prices and simulation are those of config.yml and config_local.yml, as for api.py (or the options below).
+
+Each row of the trips CSV is a trip:
+  id, departure (HH:MM)              required
+  origin_lat, origin_lon,            where it starts and ends, as coordinates...
+  destination_lat, destination_lon
+  origin_stop, destination_stop      ... or as GTFS stop ids or station codes (e.g. 8501120)
+  date                               YYYYMMDD or YYYY-MM-DD (else --date)
+  via                                places to go through, separated by ";": stop ids or "lat,lon", each with
+                                     @minutes to stay there if wanted (e.g. 8507000@30)
+and optionally the traveller:
+  age                                (else 30)
+  halbtax, ga, verbund_abo, strecken_abo, gleis7_abo, junior_abo, first_class, student    true or false
+  home_lat, home_lon, study_lat, study_lon    where they live and study
+  subscriptions                      zone subscriptions, e.g. "ZVV:110,121;Mobilis:all"
+
+It writes <out>/journeys.csv (one row per trip: arrival, duration, number of changes, lines, price and how it is made
+up) and <out>/legs.csv (one row per walk or ride). With a simulation (--crowding), each ride of legs.csv gets the
+crowding of its busiest segment (crowding_level 1 to 3, crowding_load, crowding_occupancy), and each trip of
+journeys.csv the highest crowding_level of its rides.
 """
 import argparse
 import logging
@@ -23,14 +37,16 @@ from gtfs_router.pricing import Traveller, parse_subscriptions
 
 
 def place(row, prefix):
+    """The origin or destination of a row (prefix "origin" or "destination"): its stop id, else its (lat, lon)."""
     if f"{prefix}_stop" in row and isinstance(row[f"{prefix}_stop"], str) and row[f"{prefix}_stop"]:
         return row[f"{prefix}_stop"]
     return float(row[f"{prefix}_lat"]), float(row[f"{prefix}_lon"])
 
 
 def vias(row):
-    """(places, stays in seconds) of the via column: places separated by ';', each a stop id (or station code) or
-    "lat,lon", optionally followed by @minutes to stay there (8507000@30)."""
+    """The places to go through of a row, from its via column: (places, seconds to stay at each). The places are
+    separated by ';', each a stop id (or station code) or "lat,lon", optionally followed by @minutes to stay there
+    (8507000@30)."""
     places, stays = [], []
     for item in filter(None, (part.strip() for part in str(row.get("via", "") or "").split(";"))):
         item, _, minutes = item.partition("@")
@@ -44,11 +60,13 @@ def vias(row):
 
 
 def traveller(row, halbtax, first_class):
+    """The Traveller of a row; halbtax and first_class (the options of the command line) apply to every traveller."""
     flag = lambda name: str(row.get(name, "")).strip().lower() in ("true", "1", "yes")
-    home = (float(row["home_lat"]), float(row["home_lon"])) if row.get("home_lat") and row.get("home_lon") else None
+    point = lambda name: (float(row[f"{name}_lat"]), float(row[f"{name}_lon"])) if row.get(f"{name}_lat") and row.get(f"{name}_lon") else None
+    home = point("home")
     return Traveller(age = int(row["age"]) if row.get("age") else 30, halbtax = flag("halbtax") or halbtax, ga = flag("ga"),
                      verbund_abo = flag("verbund_abo"), strecken_abo = flag("strecken_abo"), gleis7_abo = flag("gleis7_abo"),
-                     junior_abo = flag("junior_abo"), first_class = flag("first_class") or first_class, student = flag("student"), home = home,
+                     junior_abo = flag("junior_abo"), first_class = flag("first_class") or first_class, student = flag("student"), home = home, study = point("study"),
                      subscriptions = parse_subscriptions(row.get("subscriptions", "")))
 
 
@@ -68,6 +86,7 @@ def main():
     routers = {}   # date -> router on the network of the date
 
     def router_on(day):
+        """The router of a date (of the trip, else --date), made once per date."""
         day = default_date(feed, day or date)
         if day not in routers:
             routers[day] = Router(feed.on(day), cost = routing_cost(args))

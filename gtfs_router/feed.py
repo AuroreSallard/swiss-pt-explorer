@@ -1,9 +1,21 @@
-"""Reading a GTFS feed and building the arrays of the router: the stops, the connections (a vehicle going from one stop
-to the next) sorted by departure time, the stops of each trip, and the walking links between stops.
+"""Reading a GTFS timetable and turning it into the arrays the router works on.
 
-The whole feed is read once (all its trips, with the days each one runs: the calendar of its service) and kept in the
-cache; the network of a date (Network.on) keeps the connections of the trips running on it, the stops, trips and walks
-staying those of the whole feed (the same indices on every date)."""
+A GTFS feed is a set of tables (stops.txt, trips.txt, stop_times.txt, calendar.txt...). From them, this builds a Network:
+
+- the stops that are served, with their names, positions and change times;
+- the connections: every vehicle going from one stop to the next one of its trip, sorted by departure time (what the
+  Connection Scan Algorithm goes through);
+- the stops of each trip in order, with their times;
+- the walks between stops close to each other.
+
+The whole feed is read once, with the days each trip runs (the calendar of its service), and kept in the cache: for
+Switzerland, about 30 s and 1.7 GB the first time. The network of one date (Network.on) then only keeps the connections
+of the trips running that day, which takes a fraction of a second. The stops, trips and walks stay those of the whole
+feed, so their numbers (indices) are the same on every date.
+
+Many arrays are stored "flat": all the stops of all the trips in one array, with t_start telling where each trip begins
+(the stops of trip t are t_stop[t_start[t]:t_start[t + 1]]). The walks from each stop are stored the same way.
+"""
 import dataclasses
 import hashlib
 import logging
@@ -20,10 +32,12 @@ from scipy.spatial import cKDTree
 logger = logging.getLogger(__name__)
 
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-VERSION = 2   # of the network built, in the name of the cache
+VERSION = 2   # change it when the network built changes, so that the old cache files are not used
 
 
 def mode_of(route_type):
+    """The mode (rail, bus, tram...) of a GTFS route_type, of the basic types (0 to 12) or of the extended ones (100 to
+    1499)."""
     t = int(route_type)
     basic = {0: "tram", 1: "metro", 2: "rail", 3: "bus", 4: "boat", 5: "cable car", 6: "cable car", 7: "funicular", 11: "bus", 12: "rail"}
     if t in basic:
@@ -36,6 +50,7 @@ def mode_of(route_type):
 
 
 def to_seconds(values):
+    """GTFS times ("HH:MM:SS", the hours can go past 24 for the trips after midnight) as seconds after midnight."""
     if len(values) == 0:
         return np.zeros(0, np.int32)
     parts = values.astype(str).str.split(":", expand = True)
@@ -43,28 +58,32 @@ def to_seconds(values):
 
 
 def station_code(stop_id):
-    """The station code of a stop id: 8501120:0:1 -> 8501120, Parent8501120 -> 8501120."""
+    """The station code of a stop id, the same for all the platforms of a station: 8501120:0:1 -> 8501120,
+    Parent8501120 -> 8501120."""
     return str(stop_id).replace("Parent", "").split(":")[0]
 
 
 def day_of(date):
-    """YYYYMMDD of a date given as YYYYMMDD, YYYY-MM-DD, a Timestamp..."""
+    """A date as YYYYMMDD, given as YYYYMMDD, YYYY-MM-DD, a Timestamp..."""
     return pd.Timestamp(str(date)).strftime("%Y%m%d")
 
 
 class _Tables:
-    """The .txt tables of a feed in a zip or a folder, read as strings."""
+    """The .txt tables of a feed, in a zip file or a folder, read as text (no conversion of ids or times)."""
 
     def __init__(self, path):
         self.path = path
 
     def has(self, name):
+        """Whether the feed has the table (name without .txt)."""
         if os.path.isdir(self.path):
             return os.path.exists(os.path.join(self.path, f"{name}.txt"))
         with zipfile.ZipFile(self.path) as z:
             return f"{name}.txt" in z.namelist()
 
     def read(self, name, usecols = None, chunk_filter = None):
+        """A table as a DataFrame of strings. usecols: the columns wanted (the others are not read); chunk_filter: a
+        function applied to each piece of 2 million rows as it is read, to keep a large table (stop_times) small."""
         def read(handle):
             reader = pd.read_csv(handle, dtype = str, usecols = (lambda c: c in usecols) if usecols else None,
                                  keep_default_na = False, na_values = [""], chunksize = 2_000_000)
@@ -77,7 +96,9 @@ class _Tables:
 
 
 def service_calendar(tables):
-    """(service ids, first day YYYYMMDD, bool array service x day: whether it runs) of calendar and calendar_dates."""
+    """The days each service runs, from calendar.txt (weekdays between two dates) and calendar_dates.txt (days added or
+    removed). Returns (service ids, the first day as YYYYMMDD, a table of booleans: one row per service, one column per
+    day from the first one)."""
     cal = tables.read("calendar") if tables.has("calendar") else None
     cd = tables.read("calendar_dates", ["service_id", "date", "exception_type"]) if tables.has("calendar_dates") else None
     ids, bounds = [], []
@@ -92,14 +113,14 @@ def service_calendar(tables):
     first, last = min(bounds), max(bounds)
     days = pd.date_range(first, last)
     runs = np.zeros((len(services), len(days)), bool)
-    if cal is not None:
+    if cal is not None:   # the weekdays of each service, between its start and end dates
         start = (pd.to_datetime(cal["start_date"], format = "%Y%m%d") - first).dt.days.to_numpy()
         end = (pd.to_datetime(cal["end_date"], format = "%Y%m%d") - first).dt.days.to_numpy()
         week = cal[WEEKDAYS].astype(int).to_numpy().astype(bool)
         d = np.arange(len(days))
         np.logical_or.at(runs, services.get_indexer(cal["service_id"]),
                          week[:, days.weekday] & (d >= start[:, None]) & (d <= end[:, None]))
-    if cd is not None:
+    if cd is not None:    # the exceptions: 1 the service runs that day, 2 it does not
         s, d, kind = services.get_indexer(cd["service_id"]), (cd_day - first).dt.days.to_numpy(), cd["exception_type"].astype(int).to_numpy()
         runs[s[kind == 1], d[kind == 1]] = True
         runs[s[kind == 2], d[kind == 2]] = False
@@ -108,48 +129,53 @@ def service_calendar(tables):
 
 @dataclass
 class Network:
-    date: Optional[str]         # YYYYMMDD of the network of a date (Network.on), None for the whole feed
-    # stops (served by the feed)
+    """The timetable as arrays, for the whole feed or for one date (see the top of this file).
+
+    Stops, trips and routes are referred to by their position (index) in these arrays; times are seconds after the
+    midnight of the date, and can go past 24:00."""
+    date: Optional[str]         # YYYYMMDD for the network of a date (Network.on), None for the whole feed
+    # the stops served by the feed
     stop_ids: np.ndarray
     stop_names: np.ndarray
     stop_lat: np.ndarray
     stop_lon: np.ndarray
-    change_s: np.ndarray        # time to change vehicles at the same stop
-    # connections, sorted by departure time
+    change_s: np.ndarray        # the time needed to change vehicles at the stop (transfers.txt, else a default)
+    # the connections, sorted by departure time: a vehicle of trip c_trip leaving c_dep_stop at c_dep and arriving at
+    # the next stop of its trip, c_arr_stop, at c_arr
     c_dep_stop: np.ndarray
     c_arr_stop: np.ndarray
     c_dep: np.ndarray
     c_arr: np.ndarray
     c_trip: np.ndarray
-    c_pos: np.ndarray           # position of the departure stop in its trip
-    # trips: their stops (CSR) and descriptions
-    t_start: np.ndarray
+    c_pos: np.ndarray           # the position of the departure stop in its trip (0: its first stop)
+    # the trips: their stops in order (flat, see t_start), their ids and routes
+    t_start: np.ndarray         # the stops of trip t are at t_start[t] to t_start[t + 1] in t_stop, t_arr, t_dep
     t_stop: np.ndarray
     t_arr: np.ndarray
     t_dep: np.ndarray
     trip_ids: np.ndarray
-    trip_route: np.ndarray      # index in routes
-    routes: pd.DataFrame        # route_id, name, mode, agency
-    # walking between stops (CSR)
+    trip_route: np.ndarray      # the row of the trip's route in routes
+    routes: pd.DataFrame        # route_id, name (the line, e.g. IC5 or 31), mode, agency
+    # the walks between stops (flat): from stop s to f_to[f_start[s]:f_start[s + 1]], in f_dur seconds
     f_start: np.ndarray
     f_to: np.ndarray
     f_dur: np.ndarray
-    # the days the trips run (whole feed only)
-    first_day: Optional[str] = None          # YYYYMMDD, the day of service_days[:, 0]
-    trip_service: Optional[np.ndarray] = None   # row of service_days of each trip
-    service_days: Optional[np.ndarray] = None   # bool, service x day
+    # the days the trips run (for the whole feed only)
+    first_day: Optional[str] = None          # YYYYMMDD, the day of the first column of service_days
+    trip_service: Optional[np.ndarray] = None   # the row of service_days of each trip
+    service_days: Optional[np.ndarray] = None   # booleans, one row per service, one column per day: whether it runs
 
     @property
     def dates(self):
-        """(first, last) YYYYMMDD of the dates of the network."""
+        """(first, last): the first and last dates (YYYYMMDD) the network covers."""
         if self.service_days is None:
             return self.date, self.date
         last = pd.Timestamp(self.first_day) + pd.Timedelta(days = self.service_days.shape[1] - 1)
         return self.first_day, last.strftime("%Y%m%d")
 
     def on(self, date):
-        """The network of a date: the connections of the trips running on it (the stops, trips and walks of the whole
-        feed). A trip of the day before running after midnight (times after 24:00) is not in it."""
+        """The network of a date: only the connections of the trips running that day, with the stops, trips and walks of
+        the whole feed. A trip of the day before that runs after midnight (times after 24:00) is not included."""
         date = day_of(date)
         if self.service_days is None:
             if date != self.date:
@@ -165,14 +191,15 @@ class Network:
                                    first_day = None, trip_service = None, service_days = None)
 
     def departures(self):
-        """The departures of each stop on a day (on average over the dates of the whole feed)."""
+        """The number of departures from each stop in a day (for the whole feed: on average over its dates), to rank
+        the stations by how busy they are."""
         if self.service_days is None:
             return np.bincount(self.c_dep_stop, minlength = len(self.stop_ids))
         per_day = self.service_days.mean(axis = 1)[self.trip_service][self.c_trip]
         return np.bincount(self.c_dep_stop, weights = per_day, minlength = len(self.stop_ids))
 
     def stops_near(self, lat, lon, radius_m):
-        """Indices of the stops within radius_m of a point, and their beeline distances."""
+        """The stops within radius_m of a point: (their indices, their straight-line distances in metres)."""
         k = 111_320
         c = np.cos(np.radians(lat))
         d = np.hypot((self.stop_lat - lat) * k, (self.stop_lon - lon) * k * c)
@@ -180,8 +207,8 @@ class Network:
         return near, d[near]
 
     def stop_index(self, stop_id):
-        """Indices of the stops of a stop id, or of all the platforms of a station code (and the stop of the code itself:
-        some feeds serve both 8507000 and 8507000:0:6)."""
+        """The indices of a stop id, or, for a station code (8507000), of all the platforms of the station, plus the stop
+        with the code itself (some feeds serve both 8507000 and 8507000:0:6)."""
         code = station_code(stop_id)
         exact = np.flatnonzero(self.stop_ids == stop_id)
         if len(exact) and code != str(stop_id):
@@ -190,7 +217,7 @@ class Network:
 
 
 def _inside(area, lon, lat, margin_m):
-    """Whether the points are within margin_m of the polygons of the file."""
+    """Whether each point is within margin_m of the polygons of the file area."""
     import geopandas as gpd
     import shapely
     polygons = gpd.read_file(area).to_crs(2056).union_all().buffer(margin_m)
@@ -201,15 +228,20 @@ def _inside(area, lon, lat, margin_m):
 
 def build_network(gtfs_path, date = None, walk_radius_m = 400, walk_speed_m_s = 1.2, detour = 1.3, default_change_s = 60, cache_dir = None,
                   area = None, area_margin_m = 100):
-    """The router network of a GTFS feed (zip or folder): the whole feed, or with a date (YYYYMMDD) the network of that
-    date (Network.on). The whole feed is cached in cache_dir.
-    area: a file of polygons (e.g. data/network/tarifverbundkarte.geojson, the Swiss municipalities): the stops further
-    than area_margin_m from them are left out; a trip leaving the area goes on from its last stop inside to the next one."""
+    """The Network of a GTFS feed (a zip file or a folder): of the whole feed, or of one date (YYYYMMDD) when date is
+    given (as Network.on).
+
+    walk_radius_m: stops closer than this are linked by a walk, at walk_speed_m_s along the straight line × detour,
+    unless transfers.txt gives the time. default_change_s: the time to change vehicles at a stop without a transfers.txt
+    rule. cache_dir: where the whole feed is kept once read. area: a file of polygons (e.g.
+    data/network/tarifverbundkarte.geojson, the Swiss municipalities); the stops further than area_margin_m from them are
+    left out, and a trip leaving the area goes straight from its last stop inside to its next one."""
     network = _build(gtfs_path, walk_radius_m, walk_speed_m_s, detour, default_change_s, cache_dir, area, area_margin_m)
     return network.on(date) if date is not None else network
 
 
 def _build(gtfs_path, walk_radius_m, walk_speed_m_s, detour, default_change_s, cache_dir, area, area_margin_m):
+    """The Network of the whole feed, from the cache when it was built with the same file and settings."""
     if cache_dir:
         stamp = f"{VERSION}|{os.path.abspath(gtfs_path)}|{os.path.getmtime(gtfs_path)}|{walk_radius_m}|{walk_speed_m_s}|{detour}|{default_change_s}"
         if area:
@@ -232,7 +264,8 @@ def _build(gtfs_path, walk_radius_m, walk_speed_m_s, detour, default_change_s, c
     logger.info(f"  {len(trips)} trips, {len(all_stops)} stops")
 
     def compact(c):
-        """The stop times as numbers: trip and stop (indices in trips and all_stops), sequence, times in seconds."""
+        """A piece of stop_times.txt as numbers: the trip and stop (their rows in trips and all_stops), the sequence and
+        the times in seconds; the rows without a time or with an unknown trip or stop are dropped."""
         dep = c["departure_time"].fillna(c["arrival_time"])
         arr = c["arrival_time"].fillna(dep)
         trip, stop = trip_codes.get_indexer(c["trip_id"]), stop_codes.get_indexer(c["stop_id"])
@@ -243,7 +276,7 @@ def _build(gtfs_path, walk_radius_m, walk_speed_m_s, detour, default_change_s, c
     st = tables.read("stop_times", ["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"], chunk_filter = compact)
     logger.info(f"  {len(st)} stop times")
 
-    # stops: those served (and in the area)
+    # the stops: only those served by a trip (and inside the area, if any), numbered again from 0
     served = np.unique(st["stop"].to_numpy())
     stops = all_stops.iloc[served]
     if area:
@@ -258,20 +291,21 @@ def _build(gtfs_path, walk_radius_m, walk_speed_m_s, detour, default_change_s, c
     trip, seq = st["trip"].to_numpy()[keep], st["seq"].to_numpy()[keep]
     t_stop, t_arr, t_dep = st_stop[keep], st["arr"].to_numpy()[keep], st["dep"].to_numpy()[keep]
     del st
-    order = np.lexsort((seq, trip))
+    order = np.lexsort((seq, trip))   # the stop times by trip, then in the order of the trip
     trip, t_stop, t_arr, t_dep = trip[order], t_stop[order], t_arr[order], t_dep[order]
     stop_index = pd.Series(np.arange(len(stops)), index = stops.index)
     lat, lon = stops["stop_lat"].astype(float).to_numpy(), stops["stop_lon"].astype(float).to_numpy()
 
-    # trips: those with stops left
+    # the trips: those with stops left, numbered again from 0, with where their stops begin (t_start) and their service
     trip_order, t = np.unique(trip, return_inverse = True)
     t = t.astype(np.int32)
     t_start = np.concatenate([[0], np.cumsum(np.bincount(t))]).astype(np.int64)
     trips = trips.iloc[trip_order]
     trip_service = services.get_indexer(trips["service_id"])
-    trip_service[trip_service < 0] = len(services)   # a service without calendar: never runs
+    trip_service[trip_service < 0] = len(services)   # a service missing from the calendar never runs: an extra row of False
     service_days = np.vstack([service_days, np.zeros((1, service_days.shape[1]), bool)])
 
+    # the routes: the name shown for the line (short name, else long name, else id), the mode and the agency
     routes = tables.read("routes", ["route_id", "agency_id", "route_short_name", "route_long_name", "route_type"])
     agency = tables.read("agency", ["agency_id", "agency_name"]) if tables.has("agency") else None
     if agency is not None and "agency_id" in routes.columns:
@@ -282,7 +316,7 @@ def _build(gtfs_path, walk_radius_m, walk_speed_m_s, detour, default_change_s, c
     routes = routes[["route_id", "name", "mode", "agency"]].drop_duplicates("route_id").reset_index(drop = True)
     trip_route = pd.Index(routes["route_id"]).get_indexer(trips["route_id"]).astype(np.int32)
 
-    # connections: each stop to the next one of the same trip
+    # the connections: from each stop of a trip to its next one (not from the last stop), sorted by departure time
     pos = np.arange(len(t)) - t_start[t]
     nxt = np.arange(len(t)) + 1
     valid = np.ones(len(t), bool)
@@ -292,12 +326,14 @@ def _build(gtfs_path, walk_radius_m, walk_speed_m_s, detour, default_change_s, c
     order = np.lexsort((c_arr, c_dep))
     i = i[order]
 
-    # walking: the transfers.txt times, else the beeline distance with a detour at walking speed
+    # the walks: between the stops within walk_radius_m (found with a k-d tree on flat coordinates in metres), the time
+    # of transfers.txt when there is a rule, else the straight-line distance × detour at walking speed. A transfers.txt
+    # rule from a stop to itself is its change time; rules between stops further apart are added as walks too
     k = 111_320
     lat0 = np.radians(lat.mean())
     xy = np.column_stack([lon * k * np.cos(lat0), lat * k])
     pairs = np.array(sorted(cKDTree(xy).query_pairs(walk_radius_m)), dtype = np.int64).reshape(-1, 2)
-    pairs = np.vstack([pairs, pairs[:, ::-1]])
+    pairs = np.vstack([pairs, pairs[:, ::-1]])   # both ways
     dur = np.hypot(*(xy[pairs[:, 0]] - xy[pairs[:, 1]]).T) * detour / walk_speed_m_s
     change = np.full(len(stops), default_change_s, np.int32)
     if tables.has("transfers"):
@@ -316,7 +352,7 @@ def _build(gtfs_path, walk_radius_m, walk_speed_m_s, detour, default_change_s, c
             pairs = np.vstack([pairs, np.array(list(extra))])
             dur = np.concatenate([dur, rules.reindex(extra).to_numpy()])
         logger.info(f"  {len(tr)} transfers.txt rules ({same.sum()} at the same stop)")
-    o = np.argsort(pairs[:, 0], kind = "stable")
+    o = np.argsort(pairs[:, 0], kind = "stable")   # the walks grouped by the stop they leave (f_start)
     pairs, dur = pairs[o], dur[o]
     f_start = np.searchsorted(pairs[:, 0], np.arange(len(stops) + 1)).astype(np.int64)
 

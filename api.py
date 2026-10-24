@@ -1,25 +1,22 @@
-"""Web API of the router, and the map page of web/.
+"""The web server: the map page of web/ and the API it calls.
 
-    python api.py --gtfs gtfs_fp2026_20251214.zip --port 8000
+    python api.py
 
-(the defaults of the options are in config.yml and config_local.yml)
+then open http://localhost:8000. The timetable, prices and simulation are those of config.yml and config_local.yml
+(or the options below). The API is described at http://localhost:8000/docs:
 
-then open http://localhost:8000 (the API is described at http://localhost:8000/docs). Endpoints:
-  GET /api/info                      the dates of the feed (first, last, default), its extent
-  GET /api/stations?q=lausanne       stations by name (the stops of the same name within 1 km are one station)
-  GET /api/route?from=..&to=..&date=2026-03-18&time=08:00[&via=..&via=..]
-        date: YYYY-MM-DD or YYYYMMDD, a date of the feed (default: the --date of the server, else today);
-        from, to, via (places to go through, in order, repeated): "lat,lon" or "station:<id>" (an id of /api/stations);
-        stay (repeated, one per via): minutes to stay there (the journey goes on after it, with another ticket); the traveller of the pricing: age, halbtax, ga,
-        verbund_abo, strecken_abo, gleis7_abo, junior_abo, first_class, student, home ("lat,lon"), subscriptions (the zones of the
-        subscriptions: "ZVV:110,121;Mobilis:all"); optimize: cost (the least generalized cost, csa.SWISS_COST: fewer
-        transfers, less walking and waiting) or time (the earliest arrival); min_change: the least minutes to change vehicles (on top of the change time of the stops and the walks);
-        alternatives: number of journeys, by
-        departure, without those another journey beats (it leaves no earlier and arrives no later, with no more
-        changes, and saves more than 5 minutes); fares: changes to the fares (JSON, a part of /api/fares).
-  GET /api/fares                     the fares: SBB distance bands, default price, price lists of the networks, discounts
-  GET /api/networks                  the fare networks, for the subscriptions
-  GET /api/networks/ZVV/zones        their zones: name, municipalities, polygons
+  GET /api/route?from=..&to=..&date=2026-03-18&time=08:00
+        the journeys between two places, with their legs, prices, crowding and passenger profiles
+  GET /api/stations?q=lausanne
+        stations by name, for the search fields
+  GET /api/info
+        the dates of the timetable (first, last, default) and the area it covers
+  GET /api/fares
+        the fares, as the price editor shows them
+  GET /api/networks, GET /api/networks/ZVV/zones
+        the fare networks and their zones (names, municipalities, polygons), to choose zone subscriptions
+
+The parameters of /api/route are described in the docstring of route() below, and at /docs.
 """
 import argparse
 import functools
@@ -41,7 +38,7 @@ from gtfs_router.pricing import Traveller, parse_subscriptions
 from scipy.spatial import ConvexHull
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MARGIN_S = 5 * 60   # a journey beaten by another one (leaving later, arriving earlier) is kept if it loses at most this
+MARGIN_S = 5 * 60   # a journey beaten by another one (leaving later, arriving earlier) is still listed if it loses at most this
 logger = logging.getLogger(__name__)
 
 
@@ -51,9 +48,11 @@ def _normalized(text):
 
 
 class Stations:
-    """The stops grouped by name and proximity: the platforms of a station, the two sides of a bus stop..."""
+    """The stations of the search fields: the stops grouped by name and proximity (the platforms of a station, the two
+    sides of a bus stop...), ranked by how many departures they have."""
 
     def __init__(self, net, radius_m = 1000):
+        """The stops of the same name within radius_m of each other are one station, at their average position."""
         k = 111_320
         departures = net.departures()
         stops = pd.DataFrame({"name": net.stop_names, "lat": net.stop_lat, "lon": net.stop_lon, "departures": departures})
@@ -91,13 +90,16 @@ class Stations:
         return pd.concat([found[exact], found[starts & ~exact], found[~starts]]).head(limit)
 
     def get(self, station_id):
+        """A station by its id (the id of /api/stations), or a 404 error."""
         if station_id not in self.by_id.index:
             raise HTTPException(404, f"No station {station_id}")
         return self.by_id.loc[station_id]
 
 
 class Zones:
-    """The served stops of each zone of each fare network, with the outline drawn on the map to choose subscriptions."""
+    """The zones of each fare network, as the map shows them to choose zone subscriptions: their name, municipalities,
+    number of stops, whether they count twice, and their outline (the zone polygons of the tracks, else the outline of
+    their stops)."""
 
     def __init__(self, net, pricing, tracks = None):
         polygons = self._polygons(tracks.zones) if tracks is not None else {}
@@ -126,7 +128,8 @@ class Zones:
 
     @staticmethod
     def _polygons(zones):
-        """{(network, zone): name, municipalities, center, polygons ([[ring of [lat, lon]], ...], simplified to 25 m)}."""
+        """The zone polygons for the map: {(network, zone): name, municipalities, center, polygons}, the polygons as
+        [[ring of [lat, lon]], ...], simplified to 25 m."""
         shapes = zones.assign(geometry = zones.geometry.simplify(25)).to_crs(4326)
         result = {}
         for network, zone, name, towns, geom in zip(shapes["network"], shapes["zone"], shapes["name"], shapes["municipalities"], shapes.geometry):
@@ -150,28 +153,36 @@ class Zones:
 
 def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimize_default = "cost", crowding = None, date = None,
                profiles = None):
-    """net: the network of the whole feed (the journeys of a date are routed on net.on(date)); date: the default date."""
+    """The FastAPI application: the API and the page.
+
+    net: the Network of the whole feed (the journeys of a date are routed on net.on(date)). pricing, tracks, crowding,
+    profiles: what load() and the load_* functions return (each can be None: the API then goes without it).
+    alternatives_max: the most journeys a search returns. optimize_default: "cost" or "time" when a search does not
+    say. date: the date shown first (else today if the timetable has it, else its first day)."""
     app = FastAPI(title = "GTFS router", description = "Public transport journeys and their prices")
     first_date, last_date = net.dates
     default_day = default_date(net, date)
 
     @functools.lru_cache(maxsize = 8)
     def router_on(day):
-        """The router on the network of a date (YYYYMMDD), the last dates asked kept."""
+        """The Router on the network of a date (YYYYMMDD); the routers of the last 8 dates asked are kept."""
         return Router(net.on(day))
     stations = Stations(net)
     zones = Zones(net, pricing, tracks) if pricing is not None else None
 
     @functools.lru_cache(maxsize = 32)
     def pricing_with(changes):
-        """The pricing with the fares changed by the JSON text changes (the price editor of the page), the last ones kept."""
+        """The Pricing with the fares changed by changes, the JSON text the price editor of the page sends (the last 32
+        kept); a 400 error if they are not valid."""
         try:
             return pricing.with_changes(json.loads(changes))
         except (ValueError, TypeError) as e:   # json.JSONDecodeError is a ValueError
             raise HTTPException(400, f"fares: {e}")
 
     def place(text):
-        """(router input, description) of "lat,lon" or "station:<id>"."""
+        """A place of a search, "lat,lon" or "station:<id>": (what the router takes: (lat, lon) or the stops of the
+        station, its description for the page: name, lat, lon and the station id). A place by coordinates is named after
+        the nearest stop within 300 m."""
         if text.startswith("station:") and text[8:].isdigit():
             station = stations.get(int(text[8:]))
             return list(station["stops"]), {"name": station["name"], "lat": station["lat"], "lon": station["lon"], "station": int(station.name)}
@@ -184,11 +195,12 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
         return (lat, lon), {"name": label, "lat": lat, "lon": lon}
 
     def stop(s):
+        """A stop for the page: name, position and id."""
         return {"name": str(net.stop_names[s]), "lat": float(net.stop_lat[s]), "lon": float(net.stop_lon[s]), "id": str(net.stop_ids[s])}
 
     def leave_late(journey, cost):
-        """The journey with the walk to the first vehicle just before it leaves (the router walks right away), and its cost
-        without the wait before leaving."""
+        """The journey leaving as late as it can: the router walks to the first vehicle right away and waits there, so
+        the walk is moved to just before the vehicle leaves, and the wait before leaving is taken out of its cost."""
         legs = journey.legs
         if len(legs) > 1 and legs[0].kind == "walk" and legs[1].kind == "ride":   # from the origin (coordinates or a stop of it)
             first, ride = legs[0], legs[1]
@@ -199,7 +211,7 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
         return journey
 
     def ride_stops(leg):
-        """The stops of a ride with their times."""
+        """The stops of a ride, from boarding to alighting, with their arrival and departure times."""
         begin, end = net.t_start[leg.trip], net.t_start[leg.trip + 1]
         trip_stops, dep = net.t_stop[begin:end], net.t_dep[begin:end]
         first = int(np.flatnonzero((trip_stops == leg.from_stop) & (dep == leg.dep))[0])
@@ -210,6 +222,8 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
         return rows
 
     def as_json(journey, origin, destination, origin_info, destination_info, traveller, via_info = (), prices = pricing):
+        """A journey as the page shows it: its times, number of changes and legs (each ride with its line, stops, track,
+        crowding and profile), and its price for the traveller with prices (the Pricing, with the fares of the search)."""
         legs = []
         reached = 0   # the via places given by coordinates reached (only they have walks to and from them)
         for i, leg in enumerate(journey.legs):
@@ -258,23 +272,31 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
 
     @app.get("/api/info")
     def info():
+        """The default date, the first and last dates of the timetable, the number of stops, whether there are prices and
+        which simulation gives the crowding, and the area of the departures (bounds: south-west and north-east)."""
         return {"date": iso(default_day), "first_date": iso(first_date), "last_date": iso(last_date), "stops": len(net.stop_ids), "pricing": pricing is not None,
                 "crowding": crowding.source if crowding is not None else None,
                 "bounds": [[float(np.percentile(lat, 1)), float(np.percentile(lon, 1))], [float(np.percentile(lat, 99)), float(np.percentile(lon, 99))]]}
 
     @app.get("/api/stations")
     def search_stations(q: str, limit: int = Query(10, le = 50)):
+        """The stations whose name holds every word of q (without accents or case): the exact name first, then the
+        names starting with it, then the others, the busiest first in each group."""
         return [{"id": int(r.id), "name": r.name, "lat": r.lat, "lon": r.lon, "departures": int(r.departures)}
                 for r in stations.search(q, limit).itertuples()]
 
     @app.get("/api/fares")
     def fares():
+        """The fares of the server, as the price editor shows them: "sbb" (minimum prices and price per km of each
+        distance band), "default" (the distance-based price), "networks" (the prices of each fare network) and
+        "discounts". A search can change any part of them with its fares parameter."""
         if pricing is None:
             raise HTTPException(404, "No pricing")
         return pricing.fares()
 
     @app.get("/api/networks")
     def networks():
+        """The fare networks with zones: their id, number of zones and centre on the map."""
         if zones is None:
             return []
         return [{"id": n, "zones": len(z), "center": [float(np.mean([r["center"][0] for r in z])), float(np.mean([r["center"][1] for r in z]))]}
@@ -282,6 +304,8 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
 
     @app.get("/api/networks/{network}/zones")
     def network_zones(network: str):
+        """The zones of a fare network: id, name, municipalities, number of stops, whether it counts as two zones,
+        centre and polygons."""
         if zones is None or network not in zones.networks:
             raise HTTPException(404, f"No fare network {network}")
         return zones.networks[network]
@@ -290,8 +314,27 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
     def route(from_: str = Query(..., alias = "from"), to: str = Query(...), date: Optional[str] = None, time: str = Query("08:00", pattern = r"^\d{1,2}:\d{2}(:\d{2})?$"),
               alternatives: int = Query(3, ge = 1), age: int = 30, halbtax: bool = False, ga: bool = False, verbund_abo: bool = False,
               strecken_abo: bool = False, gleis7_abo: bool = False, junior_abo: bool = False, first_class: bool = False,
-              student: bool = False, fares: str = "", home: Optional[str] = None, subscriptions: str = "", optimize: str = Query(optimize_default, pattern = "^(cost|time)$"),
+              student: bool = False, fares: str = "", home: Optional[str] = None, study: Optional[str] = None, subscriptions: str = "", optimize: str = Query(optimize_default, pattern = "^(cost|time)$"),
               via: List[str] = Query([]), stay: List[int] = Query([]), min_change: int = Query(0, ge = 0, le = 60)):
+        """The journeys from one place to another.
+
+        - from, to: "lat,lon" or "station:<id>" (an id of /api/stations).
+        - date: YYYY-MM-DD or YYYYMMDD, a date of the timetable (default: the date of the server); time: HH:MM.
+        - via (repeated): places to go through, in order, in the same forms; stay (repeated, one per via): the minutes
+          to stay there (the journey goes on after it, with another ticket).
+        - optimize: cost (the least generalized cost: fewer changes, less walking and waiting) or time (the earliest
+          arrival). min_change: the least minutes between two vehicles, on top of the change time of the stops.
+        - alternatives: how many journeys. The best journey is found, then the best one leaving after it, and so on, and
+          in each gap the best one whose first vehicle leaves before the next found. They are listed by departure,
+          without those another journey beats: it leaves no earlier and arrives no later, with no more changes, and
+          saves more than MARGIN_S (5 minutes).
+        - The traveller, for the price: age, student, halbtax, ga, verbund_abo, strecken_abo, gleis7_abo, junior_abo,
+          first_class; home and study ("lat,lon": where they live and study, for the regional subscriptions and the
+          discounts for residents); subscriptions (zone subscriptions: "ZVV:110,121;Mobilis:all").
+        - fares: changes to the fares for this search, as JSON: a part of /api/fares (the price editor of the page).
+
+        Returns the places (from, to, via) as found, the date and time, walk_min (the minutes to walk all the way, when a
+        place is given by coordinates) and the journeys."""
         try:
             day = day_of(date) if date else default_day
         except ValueError:
@@ -305,10 +348,16 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
         vias = [(place(v), minutes) for v, minutes in zip(via, stay) if v]
         via_points, via_info = [p for (p, _), _ in vias], [i for (_, i), _ in vias]
         stays = [max(minutes, 0) * 60 for _, minutes in vias]
-        home_point = tuple(float(v) for v in home.split(",")) if home else None
+        def point(text, name):
+            try:
+                lat, lon = (float(v) for v in text.split(","))
+            except ValueError:
+                raise HTTPException(400, f'{name}: "{text}" is not "lat,lon"')
+            return lat, lon
+        home_point, study_point = (point(v, name) if v else None for v, name in ((home, "home"), (study, "study")))
         traveller = Traveller(age = age, halbtax = halbtax, ga = ga, verbund_abo = verbund_abo, strecken_abo = strecken_abo,
                               gleis7_abo = gleis7_abo, junior_abo = junior_abo, first_class = first_class, student = student,
-                              home = home_point, subscriptions = parse_subscriptions(subscriptions))
+                              home = home_point, study = study_point, subscriptions = parse_subscriptions(subscriptions))
         prices = pricing_with(fares) if fares and pricing is not None else pricing
 
         wanted = min(alternatives, alternatives_max)
@@ -316,6 +365,7 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
         changes = lambda j: max(len(j.rides) - 1, 0)
 
         def search(departure, latest = None):
+            """The best journey leaving at departure (and whose first vehicle leaves before latest), or None."""
             journey = router.route(origin, destination, departure, cost = cost, via = via_points, stays = stays, latest = latest,
                                    min_change_s = 60 * min_change)
             return leave_late(journey, cost) if journey is not None else None
@@ -412,11 +462,13 @@ def hhmm(seconds):
 
 
 def _seconds(value):
+    """Seconds after midnight of "HH:MM[:SS]"."""
     parts = [int(p) for p in value.split(":")]
     return parts[0] * 3600 + parts[1] * 60 + (parts[2] if len(parts) > 2 else 0)
 
 
 def main():
+    """Starts the server with the settings of the config files and the command line."""
     parser = argparse.ArgumentParser(description = __doc__, formatter_class = argparse.RawDescriptionHelpFormatter)
     config = add_arguments(parser)
     parser.add_argument("--host", default = config.get("host") or "127.0.0.1")

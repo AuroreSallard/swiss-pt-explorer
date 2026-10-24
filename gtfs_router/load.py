@@ -1,5 +1,10 @@
-"""The options of the command line tools, with their defaults from config.yml and config_local.yml, and the network, the
-pricing and the tracks they load."""
+"""What api.py and route_trips.py share: their settings, their command-line options, and the loading of the data.
+
+The settings come from config.yml (in git, the shared defaults) and config_local.yml (not in git, the settings of one
+computer, whose keys replace those of config.yml). An option given on the command line wins over both. load() then
+builds what the options point to: the network of the timetable, the prices, the tracks, the crowding and the profiles,
+each from the cache folder when it was built before.
+"""
 import json
 import os
 
@@ -15,14 +20,16 @@ from .tracks import build_tracks
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILES = ("config.yml", "config_local.yml")   # in this order: the keys of config_local.yml (not in git) replace the others
-PATHS = ("gtfs", "pricing", "network_data", "fares", "crowding", "cache")
+PATHS = ("gtfs", "pricing", "network_data", "fares", "crowding", "cache")   # the settings that are paths
+# the files of the network data folder: the municipalities and their fare networks, the SBB rail lines, and the MATSim
+# schedule and network (for the bus routes)
 NETWORK_FILES = {"municipalities": "tarifverbundkarte.geojson", "lines": "linie-mit-polygon.geojson",
                  "schedule": "corrected_schedule.xml.gz", "matsim_network": "corrected_network.xml.gz"}
 
 
 def read_config(root = ROOT):
-    """The settings of config.yml and config_local.yml in root; their relative paths are relative to root, ~ is the home
-    folder, an empty value is None."""
+    """The settings of config.yml and config_local.yml in the folder root, as a dict. Relative paths are made relative
+    to root, ~ is the home folder, and an empty value is None."""
     config = {}
     for name in CONFIG_FILES:
         path = os.path.join(root, name)
@@ -38,7 +45,8 @@ def read_config(root = ROOT):
 
 
 def add_arguments(parser):
-    """The options shared by api.py and route_trips.py, with the defaults of the config files; returns the config."""
+    """Adds the options shared by api.py and route_trips.py to an argparse parser, with the values of the config files
+    as defaults, and returns the config (for the options of each script, such as the port of api.py)."""
     config = read_config()
     parser.add_argument("--gtfs", required = not config.get("gtfs"), default = config.get("gtfs"),
                         help = "GTFS feed: zip or folder of .txt files (default: gtfs in the config)")
@@ -64,21 +72,23 @@ def add_arguments(parser):
 
 
 def load_profiles(args):
-    """Who travels on the vehicles, from the legs, trips and persons of the simulation of --crowding, or None."""
+    """The Profiles of the simulation of --crowding (who travels on the vehicles), or None without a simulation or
+    without its legs, trips and persons."""
     return build_profiles(args.crowding, cache_dir = args.cache) if args.crowding else None
 
 
 def load_crowding(args):
-    """The crowding of the simulation of --crowding, or None."""
+    """The Crowding of the simulation of --crowding, or None without a simulation."""
     return build_crowding(args.crowding, args.crowding_sample, cache_dir = args.cache) if args.crowding else None
 
 
 def routing_cost(args):
+    """The Cost of --routing: the least generalized cost (SWISS_COST) or the earliest arrival."""
     return SWISS_COST if args.routing == "cost" else EARLIEST_ARRIVAL
 
 
 def default_date(net, date = None):
-    """The date (YYYYMMDD) given, else today if it is in the feed, else the first date of the feed."""
+    """The date to use (YYYYMMDD): the one given, else today if the timetable covers it, else its first day."""
     first, last = net.dates
     if date:
         return day_of(date)
@@ -87,8 +97,11 @@ def default_date(net, date = None):
 
 
 def load(args):
-    """(network of the whole feed, pricing or None, tracks or None) of the arguments of add_arguments; the network of a
-    date is network.on(date)."""
+    """(the Network of the whole feed, the Pricing or None, the Tracks or None), from the options of add_arguments.
+
+    There are no prices without --pricing, and no tracks without the rail lines and the municipalities in
+    --network-data. With --fares, the changes of that file are applied to the prices. The network of a date is
+    network.on(date)."""
     files = {k: os.path.join(args.network_data, f) for k, f in NETWORK_FILES.items()} if args.network_data else {}
     files = {k: f for k, f in files.items() if os.path.exists(f)}
     net = build_network(args.gtfs, cache_dir = args.cache)
