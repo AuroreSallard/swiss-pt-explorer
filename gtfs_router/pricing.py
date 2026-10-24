@@ -8,7 +8,11 @@ with the inputs of data/pricing: pricingDescription.xml, gtfs_zones.csv and SBB_
 
 The router gives the rides with their stops; the network distance of a ride (MATSim route distance in Java) is here the
 sum of the beeline distances between its consecutive stops.
+
+The fares can be changed (Pricing.fares, Pricing.with_changes: the price editor of the map), and discounts added by age
+and student status (Discount; the targetedPricing of pricingDescription.xml are discounts too).
 """
+import copy
 import math
 import os
 import re
@@ -69,6 +73,7 @@ class Traveller:
     gleis7_abo: bool = False
     junior_abo: bool = False
     first_class: bool = False
+    student: bool = False
     home: tuple = None          # (lat, lon), for the regional subscriptions
     subscriptions: dict = field(default_factory = dict)   # {network: set of zones, or None for all of them}
 
@@ -81,6 +86,24 @@ def parse_subscriptions(text):
         zones = {z.strip() for z in zones.split(",") if z.strip()}
         result[network.strip()] = None if not zones or zones == {"all"} else zones
     return result
+
+
+@dataclass
+class Discount:
+    """A share off the price of the tickets of some networks, for some travellers: the largest one that applies is taken
+    (they do not add up)."""
+    name: str
+    percent: float
+    age_min: int = None         # None: no lower bound
+    age_max: int = None         # inclusive; None: no upper bound
+    student: bool = None        # True: students only, False: non-students only, None: everyone
+    networks: tuple = ()        # the authority ids it applies to ("SBB", "None": distance-based); empty: all of them
+
+    def applies(self, authority, traveller):
+        return ((not self.networks or authority in self.networks)
+                and (self.age_min is None or traveller.age >= self.age_min)
+                and (self.age_max is None or traveller.age <= self.age_max)
+                and (self.student is None or self.student == traveller.student))
 
 
 @dataclass
@@ -99,10 +122,14 @@ class PriceResult:
     old_price: float
     network_km: float
     parts: list = field(default_factory = list)   # (authority, price) of each group of rides
+    discounts: dict = field(default_factory = dict)   # {authority: the Discount applied to its part}
 
     @property
     def rule(self):
-        return " + ".join(f"{LABELS.get(a, a)} {p:.2f}" for a, p in self.parts) or "free"
+        def part(a, p):
+            d = self.discounts.get(a)
+            return f"{LABELS.get(a, a)} {p:.2f}" + (f" ({d.name} -{d.percent:g} %)" if d else "")
+        return " + ".join(part(a, p) for a, p in self.parts) or "free"
 
 
 class Pricing:
@@ -133,11 +160,11 @@ class Pricing:
         self.sbb_min_halbtax = float(s.find("minimumPriceHalbtax").get("value"))
         self.sbb_bins = [(float(b.get("distance_min")), float(b.get("distance_max")), float(b.get("priceByKM"))) for b in s.findall("priceByKMByDistanceBin")]
 
-        self.calculators = {}
+        self.calculators, self.discounts = {}, []
         for a in root.findall("authority"):
             name = a.find("name").get("value")
             c = {"full": None, "halbtax": None, "double": set(), "center": None, "center_price": float("nan"),
-                 "additional_price": float("nan"), "age_discount": {}}
+                 "center_price_halbtax": float("nan"), "additional_price": float("nan"), "additional_price_halbtax": float("nan")}
             center_based = a.find("zonalBased").get("value") == "centerbased"
             if not center_based:
                 for p in a.findall("priceListByZone"):
@@ -148,12 +175,14 @@ class Pricing:
                     c["double"] = {z.strip() for z in two.get("zones").split(", ")}
             else:
                 c["center"] = a.find("centerZoneID").get("zone")
-                c["center_price"] = float(a.find("priceCenterZone").get("price"))
-                c["additional_price"] = float(a.find("priceAdditionalZone").get("price"))
+                # the full price and the half-fare one (halbtax="true"); without a half-fare price, the full one
+                for key, tag in (("center_price", "priceCenterZone"), ("additional_price", "priceAdditionalZone")):
+                    prices = {p.get("halbtax", "false"): float(p.get("price")) for p in a.findall(tag)}
+                    c[key] = prices.get("false", prices.get("true"))
+                    c[key + "_halbtax"] = prices.get("true", c[key])
             for t in a.findall("targetedPricing"):
                 low, high = (int(x) for x in t.get("age_range").split("_"))
-                for age in range(low, high + 1):
-                    c["age_discount"][age] = float(t.get("discount"))
+                self.discounts.append(Discount(f"{name}, age {low}-{high}", float(t.get("discount")), low, high, None, (name,)))
             self.calculators[name] = c
 
     def _read_zones(self, path):
@@ -351,7 +380,7 @@ class Pricing:
         minimum = _round_up((self.sbb_min_halbtax if halbtax else self.sbb_min) * factor, 0.2)
         return _java_round(max(price / 2.0 if halbtax else price, minimum))
 
-    def zone_price(self, authority, rides, halbtax, age, factor = 1.0):
+    def zone_price(self, authority, rides, halbtax, factor = 1.0):
         """factor: 1st class, the 2nd class price times it rounded up to 20 Rp (the same rule as the SBB until the
         zone networks are checked)."""
         c = self.calculators[authority]
@@ -367,19 +396,19 @@ class Pricing:
             if n > len(prices):
                 return _java_round(price)
         elif c["center"] in zones:
-            price = c["center_price"] + c["additional_price"] * (len(zones) - 1)
+            suffix = "_halbtax" if halbtax else ""
+            price = c["center_price" + suffix] + c["additional_price" + suffix] * (len(zones) - 1)
             if factor != 1.0:
                 price = _round_up(price * factor, 0.2)
         else:
             price = self.default_price(rides, halbtax, factor)
-        discount = c["age_discount"].get(age)
-        return _java_round(price * (1.0 - discount / 100.0 if discount is not None else 1.0))
+        return _java_round(price)
 
-    def _calculate(self, authority, rides, halbtax, age, factor = 1.0):
+    def _calculate(self, authority, rides, halbtax, factor = 1.0):
         if authority == "SBB":
             return self.sbb_price(rides, halbtax, factor)
         if authority in self.calculators:
-            return self.zone_price(authority, rides, halbtax, age, factor)
+            return self.zone_price(authority, rides, halbtax, factor)
         return self.default_price(rides, halbtax, factor)   # "None" and the authorities without a price description
 
     # ------------------------------------------------------------------ journey
@@ -427,7 +456,13 @@ class Pricing:
 
         half = t.halbtax or t.age < 16
         factor = FIRST_CLASS_FACTOR if t.first_class else 1.0
-        parts += [(authority, self._calculate(authority, group, half, t.age, factor)) for authority, group in self.group_rides(rides).items()]
+        discounts = {}
+        for authority, group in self.group_rides(rides).items():
+            price = self._calculate(authority, group, half, factor)
+            discount = max((d for d in self.discounts if d.applies(authority, t)), key = lambda d: d.percent, default = None)
+            if discount is not None and discount.percent > 0:
+                price, discounts[authority] = _java_round(price * (1.0 - discount.percent / 100.0)), discount
+            parts.append((authority, price))
         price = _java_round(sum(p for _, p in parts))
 
         old = max(2.8, 2 * (0.21 * paid_km - 0.00015 * paid_km ** 2)) * factor
@@ -437,7 +472,99 @@ class Pricing:
         if self.cap:
             cap = 35.0 if half else 60.0
             price, old = min(price, cap), min(old, cap)
-        return PriceResult(price, old, km, parts)
+        return PriceResult(price, old, km, parts, discounts)
+
+    # ------------------------------------------------------------------ fares, as the price editor shows and changes them
+
+    def fares(self):
+        """The fares as JSON: the SBB distance bands, the default distance-based price, the price lists of the networks and
+        the discounts. A part of it (the same keys) is what with_changes takes."""
+        networks = {}
+        for name, c in sorted(self.calculators.items()):
+            if c["center"] is not None:
+                networks[name] = {"kind": "center", "center_zone": c["center"], "center": c["center_price"], "center_halbtax": c["center_price_halbtax"],
+                                  "additional": c["additional_price"], "additional_halbtax": c["additional_price_halbtax"]}
+            else:
+                networks[name] = {"kind": "zones", "full": c["full"], "halbtax": c["halbtax"], "double": sorted(c["double"])}
+        flat, per_km, power2 = self.default
+        return {"sbb": {"minimum": self.sbb_min, "minimum_halbtax": self.sbb_min_halbtax,
+                        "bands": [{"from_km": low, "to_km": high, "chf_per_km": rate} for low, high, rate in self.sbb_bins]},
+                "default": {"flat": flat, "per_km": per_km, "per_km2": power2},
+                "networks": networks,
+                "discounts": [{"name": d.name, "percent": d.percent, "age_min": d.age_min, "age_max": d.age_max, "student": d.student,
+                               "networks": list(d.networks)} for d in self.discounts]}
+
+    def with_changes(self, changes):
+        """A Pricing with some of the fares changed, this one unchanged. changes: a part of fares(): "sbb", "default", a
+        network of "networks" (each given whole), "discounts" (the whole list). ValueError if a value is not valid."""
+        if not isinstance(changes, dict) or set(changes) - {"sbb", "default", "networks", "discounts"}:
+            raise ValueError('The changes are a JSON object with "sbb", "default", "networks" or "discounts"')
+        other = copy.copy(self)
+        other.calculators = {name: dict(c) for name, c in self.calculators.items()}
+        if "sbb" in changes:
+            s = _object(changes["sbb"], "sbb", {"minimum", "minimum_halbtax", "bands"})
+            bands = s.get("bands", [{"from_km": l, "to_km": h, "chf_per_km": r} for l, h, r in self.sbb_bins])
+            if not isinstance(bands, list) or not bands:
+                raise ValueError("sbb.bands: a list of distance bands")
+            other.sbb_bins = sorted(((_number(b, "from_km", "sbb.bands"), _number(b, "to_km", "sbb.bands"), _number(b, "chf_per_km", "sbb.bands"))
+                                     for b in bands), key = lambda b: b[0])
+            if any(low > high for low, high, _ in other.sbb_bins):
+                raise ValueError("sbb.bands: from_km after to_km")
+            other.sbb_min = _number(s, "minimum", "sbb", self.sbb_min)
+            other.sbb_min_halbtax = _number(s, "minimum_halbtax", "sbb", self.sbb_min_halbtax)
+        if "default" in changes:
+            d = _object(changes["default"], "default", {"flat", "per_km", "per_km2"})
+            flat, per_km, power2 = self.default
+            other.default = (_number(d, "flat", "default", flat), _number(d, "per_km", "default", per_km),
+                             _number(d, "per_km2", "default", power2, negative = True))
+        for name, n in _object(changes.get("networks", {}), "networks").items():
+            if name not in self.calculators:
+                raise ValueError(f"No fare network {name} with prices")
+            c = other.calculators[name]
+            if c["center"] is not None:
+                n = _object(n, name, {"kind", "center_zone", "center", "center_halbtax", "additional", "additional_halbtax"})
+                for key, price in (("center", "center_price"), ("center_halbtax", "center_price_halbtax"),
+                                   ("additional", "additional_price"), ("additional_halbtax", "additional_price_halbtax")):
+                    c[price] = _number(n, key, name, c[price])
+            else:
+                n = _object(n, name, {"kind", "full", "halbtax", "double"})
+                for key in ("full", "halbtax"):
+                    if key in n:
+                        if not isinstance(n[key], list) or not n[key] or len(n[key]) > 100:
+                            raise ValueError(f"{name}.{key}: a list of prices, by number of zones")
+                        c[key] = [_number({"price": v}, "price", f"{name}.{key}") for v in n[key]]
+        if "discounts" in changes:
+            if not isinstance(changes["discounts"], list) or len(changes["discounts"]) > 50:
+                raise ValueError("discounts: a list (of at most 50)")
+            known = set(self.calculators) | {"SBB", "None"}
+            other.discounts = []
+            for k, d in enumerate(changes["discounts"]):
+                d = _object(d, f"discounts[{k}]", {"name", "percent", "age_min", "age_max", "student", "networks"})
+                percent = _number(d, "percent", f"discounts[{k}]")
+                if percent > 100:
+                    raise ValueError(f"discounts[{k}].percent: at most 100")
+                ages = [None if d.get(key) is None else int(_number(d, key, f"discounts[{k}]")) for key in ("age_min", "age_max")]
+                if d.get("student") not in (None, True, False):
+                    raise ValueError(f"discounts[{k}].student: true, false or null")
+                networks = d.get("networks") or []
+                if not isinstance(networks, list) or set(networks) - known:
+                    raise ValueError(f"discounts[{k}].networks: unknown {sorted(set(networks) - known) if isinstance(networks, list) else networks}")
+                other.discounts.append(Discount(str(d.get("name") or f"Discount {k + 1}")[:60], percent, ages[0], ages[1], d.get("student"), tuple(networks)))
+        return other
+
+
+def _object(value, where, keys = None):
+    if not isinstance(value, dict) or (keys is not None and set(value) - keys):
+        raise ValueError(f"{where}: an object" + (f" with {', '.join(sorted(keys))}" if keys else ""))
+    return value
+
+
+def _number(values, key, where, default = None, negative = False):
+    """values[key] as a float (default if missing): finite, at least 0 unless negative."""
+    value = values.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or (value < 0 and not negative):
+        raise ValueError(f"{where}.{key}: a number" + ("" if negative else " of at least 0"))
+    return float(value)
 
 
 def _ride_km(network, stops):

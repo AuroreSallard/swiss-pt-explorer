@@ -1,7 +1,10 @@
-"""The network, the pricing and the tracks of the command line tools, from the files of data/."""
+"""The options of the command line tools, with their defaults from config.yml and config_local.yml, and the network, the
+pricing and the tracks they load."""
+import json
 import os
 
 import pandas as pd
+import yaml
 
 from .crowding import build_crowding
 from .profiles import build_profiles
@@ -10,29 +13,54 @@ from .feed import build_network, day_of
 from .pricing import Pricing
 from .tracks import build_tracks
 
-DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-CROWDING = os.path.expanduser("~/Documents/Results/20261018_60it_ch_5pct")   # the default simulation (Switzerland, 5 %)
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_FILES = ("config.yml", "config_local.yml")   # in this order: the keys of config_local.yml (not in git) replace the others
+PATHS = ("gtfs", "pricing", "network_data", "fares", "crowding", "cache")
 NETWORK_FILES = {"municipalities": "tarifverbundkarte.geojson", "lines": "linie-mit-polygon.geojson",
                  "schedule": "corrected_schedule.xml.gz", "matsim_network": "corrected_network.xml.gz"}
 
 
+def read_config(root = ROOT):
+    """The settings of config.yml and config_local.yml in root; their relative paths are relative to root, ~ is the home
+    folder, an empty value is None."""
+    config = {}
+    for name in CONFIG_FILES:
+        path = os.path.join(root, name)
+        if os.path.exists(path):
+            with open(path) as f:
+                config.update(yaml.safe_load(f) or {})
+    for key in PATHS:
+        if config.get(key):
+            config[key] = os.path.join(root, os.path.expanduser(str(config[key])))
+    if config.get("date") is not None:
+        config["date"] = str(config["date"])
+    return config
+
+
 def add_arguments(parser):
-    parser.add_argument("--gtfs", required = True, help = "GTFS feed: zip or folder of .txt files")
-    parser.add_argument("--date", default = None, help = "YYYYMMDD, a date of the feed: the date of the journeys (default: today, else the "
-                                                         "first date of the feed)")
-    parser.add_argument("--pricing", default = os.path.join(DATA, "pricing"), help = "Folder with the pricing inputs; empty: no prices")
-    parser.add_argument("--network-data", default = os.path.join(DATA, "network"),
+    """The options shared by api.py and route_trips.py, with the defaults of the config files; returns the config."""
+    config = read_config()
+    parser.add_argument("--gtfs", required = not config.get("gtfs"), default = config.get("gtfs"),
+                        help = "GTFS feed: zip or folder of .txt files (default: gtfs in the config)")
+    parser.add_argument("--date", default = config.get("date"), help = "YYYYMMDD, a date of the feed: the date of the journeys (default: today, "
+                                                                     "else the first date of the feed)")
+    parser.add_argument("--pricing", default = config.get("pricing"), help = "Folder with the pricing inputs; empty: no prices")
+    parser.add_argument("--fares", default = config.get("fares"),
+                        help = "JSON file of changes to the fares of --pricing, as the price editor of the map exports them")
+    parser.add_argument("--network-data", default = config.get("network_data"),
                         help = "Folder with " + ", ".join(NETWORK_FILES.values()) + ": the tracks and the zones they "
                                "cross; empty: straight lines and the zones of the stops")
-    parser.add_argument("--routing", choices = ["cost", "earliest"], default = "cost",
+    parser.add_argument("--routing", choices = ["cost", "earliest"], default = config.get("routing") or "cost",
                         help = "cost: the journey of least generalized cost (the eqasim utilities: in-vehicle time by mode, waiting, "
                                "walking, transfers; csa.SWISS_COST); earliest: the earliest arrival")
-    parser.add_argument("--crowding", default = CROWDING if os.path.isdir(CROWDING) else None,
+    parser.add_argument("--crowding", default = config.get("crowding"),
                         help = "Output folder of a MATSim simulation (pt_passenger_counts.csv.gz, output_transitSchedule.xml.gz, "
                                "output_transitVehicles.xml.gz): the crowding of the vehicles, by line, pair of stations and hour "
-                             "(default: the Swiss simulation at 5 %%; empty: no crowding)")
-    parser.add_argument("--crowding-sample", type = float, default = 0.05, help = "Sample rate of the simulated population (0.05: 5 %%)")
-    parser.add_argument("--cache", default = os.path.join(os.path.dirname(DATA), "cache"), help = "Where the network and the tracks are kept")
+                             "(default: crowding in the config; empty: no crowding)")
+    parser.add_argument("--crowding-sample", type = float, default = config.get("crowding_sample") or 0.05,
+                        help = "Sample rate of the simulated population (0.05: 5 %%)")
+    parser.add_argument("--cache", default = config.get("cache") or os.path.join(ROOT, "cache"), help = "Where the network and the tracks are kept")
+    return config
 
 
 def load_profiles(args):
@@ -70,4 +98,8 @@ def load(args):
     if "lines" in files and "municipalities" in files:
         tracks = build_tracks(net, Pricing(args.pricing), files["lines"], files["municipalities"], files.get("schedule"), files.get("matsim_network"),
                               cache_dir = args.cache)
-    return net, Pricing(args.pricing, tracks = tracks), tracks
+    pricing = Pricing(args.pricing, tracks = tracks)
+    if args.fares:
+        with open(args.fares) as f:
+            pricing = pricing.with_changes(json.load(f))
+    return net, pricing, tracks

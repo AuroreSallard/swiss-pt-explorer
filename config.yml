@@ -1,0 +1,23 @@
+# Settings of Swiss PT explorer: the defaults of the options of api.py and route_trips.py (an option given on the
+# command line wins over them).
+#
+# Don't write the paths of your own computer here: put them in config_local.yml, next to this file. It is not in git,
+# and its keys replace those of this file. For example:
+#
+#   gtfs: ~/data/gtfs_fp2026_20251214.zip
+#   crowding: ~/simulations/ch_5pct/simulation_output
+#   crowding_sample: 0.05
+#
+# Relative paths are relative to this folder, ~ is your home folder, and an empty value means "none".
+
+gtfs:                        # the timetable: a GTFS zip, or a folder of its .txt files (required, here or with --gtfs)
+date:                        # YYYYMMDD: the date shown first, or of the trips (empty: today if the timetable has it, else its first day)
+pricing: data/pricing        # the fare inputs (empty: no prices)
+fares:                       # a JSON file of changes to these fares, as the price editor of the map exports them (empty: none)
+network_data: data/network   # the rail lines, bus routes and fare network map (empty: straight lines, zones of the stops)
+routing: cost                # cost (least generalized cost) or earliest (earliest arrival)
+crowding:                    # the output folder of a MATSim simulation: crowding and profiles of travellers (empty: none)
+crowding_sample: 0.05        # the share of the population that simulation simulated (0.05: 5 %)
+cache: cache                 # where the network, tracks, crowding and profiles are kept after the first start
+host: 127.0.0.1              # api.py: the address and port of the server
+port: 8000

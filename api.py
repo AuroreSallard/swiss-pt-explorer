@@ -1,6 +1,8 @@
 """Web API of the router, and the map page of web/.
 
-    python api.py --gtfs ~/Documents/Data/pipeline/gtfs/gtfs_fp2026_20251214.zip --port 8000
+    python api.py --gtfs gtfs_fp2026_20251214.zip --port 8000
+
+(the defaults of the options are in config.yml and config_local.yml)
 
 then open http://localhost:8000 (the API is described at http://localhost:8000/docs). Endpoints:
   GET /api/info                      the dates of the feed (first, last, default), its extent
@@ -9,17 +11,19 @@ then open http://localhost:8000 (the API is described at http://localhost:8000/d
         date: YYYY-MM-DD or YYYYMMDD, a date of the feed (default: the --date of the server, else today);
         from, to, via (places to go through, in order, repeated): "lat,lon" or "station:<id>" (an id of /api/stations);
         stay (repeated, one per via): minutes to stay there (the journey goes on after it, with another ticket); the traveller of the pricing: age, halbtax, ga,
-        verbund_abo, strecken_abo, gleis7_abo, junior_abo, first_class, home ("lat,lon"), subscriptions (the zones of the
+        verbund_abo, strecken_abo, gleis7_abo, junior_abo, first_class, student, home ("lat,lon"), subscriptions (the zones of the
         subscriptions: "ZVV:110,121;Mobilis:all"); optimize: cost (the least generalized cost, csa.SWISS_COST: fewer
         transfers, less walking and waiting) or time (the earliest arrival); min_change: the least minutes to change vehicles (on top of the change time of the stops and the walks);
         alternatives: number of journeys, by
         departure, without those another journey beats (it leaves no earlier and arrives no later, with no more
-        changes, and saves more than 5 minutes).
+        changes, and saves more than 5 minutes); fares: changes to the fares (JSON, a part of /api/fares).
+  GET /api/fares                     the fares: SBB distance bands, default price, price lists of the networks, discounts
   GET /api/networks                  the fare networks, for the subscriptions
   GET /api/networks/ZVV/zones        their zones: name, municipalities, polygons
 """
 import argparse
 import functools
+import json
 import logging
 import os
 import unicodedata
@@ -158,6 +162,14 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
     stations = Stations(net)
     zones = Zones(net, pricing, tracks) if pricing is not None else None
 
+    @functools.lru_cache(maxsize = 32)
+    def pricing_with(changes):
+        """The pricing with the fares changed by the JSON text changes (the price editor of the page), the last ones kept."""
+        try:
+            return pricing.with_changes(json.loads(changes))
+        except (ValueError, TypeError) as e:   # json.JSONDecodeError is a ValueError
+            raise HTTPException(400, f"fares: {e}")
+
     def place(text):
         """(router input, description) of "lat,lon" or "station:<id>"."""
         if text.startswith("station:") and text[8:].isdigit():
@@ -197,7 +209,7 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
             rows.append(stop(s) | {"arr": hhmm(int(net.t_arr[begin + p])), "dep": hhmm(int(net.t_dep[begin + p]))})
         return rows
 
-    def as_json(journey, origin, destination, origin_info, destination_info, traveller, via_info = ()):
+    def as_json(journey, origin, destination, origin_info, destination_info, traveller, via_info = (), prices = pricing):
         legs = []
         reached = 0   # the via places given by coordinates reached (only they have walks to and from them)
         for i, leg in enumerate(journey.legs):
@@ -234,8 +246,8 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
                   "duration_min": round((journey.arr - journey.dep) / 60), "changes": max(len(rides) - 1, 0), "legs": legs,
                   "cost_min": round(journey.cost / 60, 1),
                   "crowding_level": max((l["crowding"]["level"] for l in legs if l.get("crowding")), default = None)}
-        if pricing is not None:
-            price = pricing.price(journey, net, traveller, origin if isinstance(origin, tuple) else None,
+        if prices is not None:
+            price = prices.price(journey, net, traveller, origin if isinstance(origin, tuple) else None,
                                   destination if isinstance(destination, tuple) else None)
             result["price"] = {"chf": price.price, "rule": price.rule, "old_chf": price.old_price, "network_km": round(price.network_km, 1)}
         return result
@@ -255,6 +267,12 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
         return [{"id": int(r.id), "name": r.name, "lat": r.lat, "lon": r.lon, "departures": int(r.departures)}
                 for r in stations.search(q, limit).itertuples()]
 
+    @app.get("/api/fares")
+    def fares():
+        if pricing is None:
+            raise HTTPException(404, "No pricing")
+        return pricing.fares()
+
     @app.get("/api/networks")
     def networks():
         if zones is None:
@@ -272,7 +290,7 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
     def route(from_: str = Query(..., alias = "from"), to: str = Query(...), date: Optional[str] = None, time: str = Query("08:00", pattern = r"^\d{1,2}:\d{2}(:\d{2})?$"),
               alternatives: int = Query(3, ge = 1), age: int = 30, halbtax: bool = False, ga: bool = False, verbund_abo: bool = False,
               strecken_abo: bool = False, gleis7_abo: bool = False, junior_abo: bool = False, first_class: bool = False,
-              home: Optional[str] = None, subscriptions: str = "", optimize: str = Query(optimize_default, pattern = "^(cost|time)$"),
+              student: bool = False, fares: str = "", home: Optional[str] = None, subscriptions: str = "", optimize: str = Query(optimize_default, pattern = "^(cost|time)$"),
               via: List[str] = Query([]), stay: List[int] = Query([]), min_change: int = Query(0, ge = 0, le = 60)):
         try:
             day = day_of(date) if date else default_day
@@ -289,8 +307,9 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
         stays = [max(minutes, 0) * 60 for _, minutes in vias]
         home_point = tuple(float(v) for v in home.split(",")) if home else None
         traveller = Traveller(age = age, halbtax = halbtax, ga = ga, verbund_abo = verbund_abo, strecken_abo = strecken_abo,
-                              gleis7_abo = gleis7_abo, junior_abo = junior_abo, first_class = first_class, home = home_point,
-                              subscriptions = parse_subscriptions(subscriptions))
+                              gleis7_abo = gleis7_abo, junior_abo = junior_abo, first_class = first_class, student = student,
+                              home = home_point, subscriptions = parse_subscriptions(subscriptions))
+        prices = pricing_with(fares) if fares and pricing is not None else pricing
 
         wanted = min(alternatives, alternatives_max)
         cost = SWISS_COST if optimize == "cost" else EARLIEST_ARRIVAL
@@ -371,7 +390,7 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
             walk_min = round(float(router._walk_s(np.hypot((a[0] - b[0]) * k, (a[1] - b[1]) * k * np.cos(np.radians(a[0]))))) / 60)
         return {"from": origin_info, "to": destination_info, "via": via_info, "date": iso(day), "time": time, "walk_min": walk_min,
                 "journeys": [as_json(j, origin, destination, origin_info, destination_info, traveller,
-                                     [i for p, i in zip(via_points, via_info) if isinstance(p, tuple)]) for j in journeys]}
+                                     [i for p, i in zip(via_points, via_info) if isinstance(p, tuple)], prices) for j in journeys]}
 
     app.mount("/", _FreshFiles(directory = os.path.join(HERE, "web"), html = True), name = "web")
     return app
@@ -399,9 +418,9 @@ def _seconds(value):
 
 def main():
     parser = argparse.ArgumentParser(description = __doc__, formatter_class = argparse.RawDescriptionHelpFormatter)
-    add_arguments(parser)
-    parser.add_argument("--host", default = "127.0.0.1")
-    parser.add_argument("--port", type = int, default = 8000)
+    config = add_arguments(parser)
+    parser.add_argument("--host", default = config.get("host") or "127.0.0.1")
+    parser.add_argument("--port", type = int, default = config.get("port") or 8000)
     args = parser.parse_args()
     logging.basicConfig(level = logging.INFO, format = "%(message)s")
 

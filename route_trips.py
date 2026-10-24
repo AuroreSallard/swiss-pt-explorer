@@ -4,7 +4,7 @@
 
 The trips CSV has the columns id, departure (HH:MM), optionally date (YYYYMMDD or YYYY-MM-DD, else --date) and either origin_lat, origin_lon, destination_lat,
 destination_lon, or origin_stop, destination_stop (GTFS stop ids or station codes, e.g. 8501120), and optionally the
-traveller: age, halbtax, ga, verbund_abo, strecken_abo, gleis7_abo, junior_abo, first_class (true/false), home_lat, home_lon, subscriptions (zones,
+traveller: age, halbtax, ga, verbund_abo, strecken_abo, gleis7_abo, junior_abo, first_class, student (true/false), home_lat, home_lon, subscriptions (zones,
 e.g. "ZVV:110,121;Mobilis:all"), via (places to go through, separated by ";": stop ids or "lat,lon", with @minutes to stay there, e.g. 8507000@30). Writes
 <out>/journeys.csv (one row per trip: times, number of changes, price) and <out>/legs.csv (one row per leg). With
 --crowding <MATSim output folder>: the crowding of the rides (level 1 to 3, load, occupancy of the busiest segment).
@@ -48,7 +48,7 @@ def traveller(row, halbtax, first_class):
     home = (float(row["home_lat"]), float(row["home_lon"])) if row.get("home_lat") and row.get("home_lon") else None
     return Traveller(age = int(row["age"]) if row.get("age") else 30, halbtax = flag("halbtax") or halbtax, ga = flag("ga"),
                      verbund_abo = flag("verbund_abo"), strecken_abo = flag("strecken_abo"), gleis7_abo = flag("gleis7_abo"),
-                     junior_abo = flag("junior_abo"), first_class = flag("first_class") or first_class, home = home,
+                     junior_abo = flag("junior_abo"), first_class = flag("first_class") or first_class, student = flag("student"), home = home,
                      subscriptions = parse_subscriptions(row.get("subscriptions", "")))
 
 

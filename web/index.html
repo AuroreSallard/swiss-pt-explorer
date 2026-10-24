@@ -18,16 +18,19 @@
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   html, body { margin: 0; height: 100%; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: var(--bg); }
-  #app { display: flex; height: 100%; }
+  body { display: flex; flex-direction: column; }
+  #app { display: flex; flex: 1; min-height: 0; }
   #panel { width: 400px; flex: none; background: var(--panel); display: flex; flex-direction: column; box-shadow: var(--shadow); z-index: 1000; }
   #mapwrap { flex: 1; position: relative; }
   #map { position: absolute; inset: 0; }
 
-  #profile-btn { position: absolute; top: 14px; right: 14px; z-index: 1001; width: 52px; height: 52px; border-radius: 50%; border: none;
+  #profile-btn, #fares-btn { position: absolute; top: 14px; right: 14px; z-index: 1001; width: 52px; height: 52px; border-radius: 50%; border: none;
                  background: var(--panel); color: var(--text); box-shadow: var(--shadow); cursor: pointer; display: grid; place-items: center; }
-  #profile-btn:hover { background: var(--hover); }
-  #profile-btn svg { width: 30px; height: 30px; }
-  #profile-btn .badge { position: absolute; top: -2px; right: -2px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px;
+  #fares-btn { top: 76px; }
+  #profile-btn:hover, #fares-btn:hover { background: var(--hover); }
+  #profile-btn svg, #fares-btn svg { width: 30px; height: 30px; }
+  #fares-btn svg { width: 26px; height: 26px; }
+  #profile-btn .badge, #fares-btn .badge { position: absolute; top: -2px; right: -2px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px;
                         background: var(--accent); color: var(--bg); font-size: 12px; font-weight: 700; line-height: 20px; }
   .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 380px; max-width: 100%; z-index: 1002; background: var(--panel);
             box-shadow: var(--shadow); display: flex; flex-direction: column; }
@@ -57,6 +60,37 @@
   #zone-list input { margin-top: 3px; accent-color: var(--accent); }
   #zone-list .zid { font-weight: 700; min-width: 42px; }
   #zone-list small { color: var(--muted); display: block; }
+  /* the price editor: one section per part of the fares, marked when changed */
+  .drawer button.text { border: none; background: none; color: var(--accent); font: inherit; cursor: pointer; padding: 4px; }
+  .drawer button.text:disabled { color: var(--muted); cursor: default; }
+  .fares-tools { display: flex; gap: 4px 10px; flex-wrap: wrap; margin-top: 8px; }
+  .fsec { border-top: 1px solid var(--line); margin-top: 14px; }
+  .fsec-head { display: flex; align-items: baseline; gap: 8px; }
+  .fsec-head h3 { flex: 1; }
+  .fsec .reset { visibility: hidden; }
+  .fsec.changed .reset { visibility: visible; }
+  .fsec.changed h3::after { content: " · changed"; color: var(--accent); text-transform: none; letter-spacing: 0; }
+  .frow { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  .frow > span { flex: 1; }
+  .drawer .frow input[type=number] { width: 96px; text-align: right; }
+  .ftable { width: 100%; border-collapse: collapse; }
+  .ftable th { text-align: right; color: var(--muted); font-weight: 400; font-size: 12px; padding: 2px 4px; }
+  .ftable th:first-child, .ftable td:first-child { text-align: left; color: var(--muted); white-space: nowrap; }
+  .ftable td { padding: 2px 4px; }
+  .drawer .ftable input[type=number] { width: 100%; padding: 5px 7px; text-align: right; }
+  .drawer input.bad { outline: 2px solid #d93025; border-color: transparent; }
+  #fare-network { width: 100%; margin-bottom: 8px; }
+  .discount { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px 8px; margin-bottom: 8px; }
+  .discount .drow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; color: var(--muted); }
+  .discount .dname { flex: 1; min-width: 0; padding: 4px 0; border: none; border-bottom: 1px dashed var(--line); background: none; color: var(--text); font: inherit; font-weight: 600; }
+  .discount .dname:focus { outline: none; border-bottom-color: var(--accent); }
+  .drawer .discount input[type=number] { width: 62px; padding: 4px 6px; text-align: right; }
+  .discount select { padding: 4px 6px; }
+  .discount details { margin-top: 6px; }
+  .discount summary { cursor: pointer; color: var(--accent); }
+  .discount .nets { columns: 2; margin-top: 4px; max-height: 200px; overflow: auto; }
+  .discount .nets label { display: flex; gap: 6px; align-items: center; padding: 2px 0; color: var(--text); break-inside: avoid; }
+  .card .price.edited::after { content: " ✎"; color: var(--accent); }
   .zone-label { background: none; border: none; box-shadow: none; font-weight: 700; color: #174ea6; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
   .zone-label::before { display: none; }
   header { padding: 16px 16px 12px; border-bottom: 1px solid var(--line); }
@@ -179,6 +213,24 @@
   .tl button.link { display: block; border: none; background: none; color: var(--accent); padding: 0; font: inherit; font-size: 13px; cursor: pointer; }
   .pricebox { margin: 4px 0 0 72px; color: var(--muted); font-size: 12px; }
 
+  /* the line at the bottom of the page, and the methods it opens */
+  .footer { flex: none; display: flex; align-items: center; gap: 24px; height: 34px; padding: 0 24px; border-top: 1px solid var(--line);
+            background: var(--panel); font-size: 12px; z-index: 1003; }
+  .footer a, .footer button { border: none; background: none; padding: 0; font: inherit; color: var(--muted); text-decoration: none; cursor: pointer; }
+  .footer a:hover, .footer button:hover { color: var(--text); }
+  #methods { width: min(720px, calc(100% - 32px)); max-height: min(85vh, 900px); padding: 0; border: none; border-radius: 12px;
+             background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+  #methods::backdrop { background: rgba(0, 0, 0, .45); }
+  #methods .drawer-head { position: sticky; top: 0; background: var(--panel); }
+  #methods .methods-body { padding: 4px 24px 24px; line-height: 1.55; }
+  #methods h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 22px 0 6px; }
+  #methods p, #methods ul { margin: 6px 0; }
+  #methods ul { padding-left: 20px; }
+  #methods a { color: var(--accent); }
+  #methods table { border-collapse: collapse; margin: 6px 0; }
+  #methods td, #methods th { padding: 3px 12px 3px 0; text-align: left; }
+  #methods th { color: var(--muted); font-weight: 400; }
+
   .pin { width: 18px; height: 18px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
   .pin.from { background: #fff; border-color: #202124; }
   .pin.to { background: #d93025; }
@@ -188,6 +240,7 @@
     #app { flex-direction: column-reverse; }
     #panel { width: 100%; height: 58%; }
     #mapwrap { height: 42%; flex: none; }
+    .footer { gap: 16px; padding: 0 16px; }
     .drawer { position: fixed; width: 100%; }
   }
 </style>
@@ -227,6 +280,7 @@
       <div class="drawer-body" id="profile-main">
         <h3>Traveller</h3>
         <label class="toggle"><span>Age</span><input id="age" type="number" min="0" max="120" value="30" style="width: 80px; height: auto"></label>
+        <label class="toggle"><span>Student<small>For the student discounts of the fares (the tag button)</small></span><input type="checkbox" id="student"></label>
         <h3>Routes</h3>
         <label class="toggle"><span>Best routes<small>Fewer changes, less walking and waiting</small></span><input type="radio" name="optimize" value="cost"></label>
         <label class="toggle"><span>Fastest<small>The earliest arrival, whatever the changes</small></span><input type="radio" name="optimize" value="time"></label>
@@ -252,8 +306,103 @@
         <ul id="zone-list"></ul>
       </div>
     </aside>
+    <button id="fares-btn" title="Fares: change the prices and add discounts" aria-label="Fares" hidden>
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.41 11.58l-9-9A2 2 0 0 0 11 2H4a2 2 0 0 0-2 2v7c0 .55.22 1.05.59 1.42l9 9a2 2 0 0 0 2.82 0l7-7a2 2 0 0 0 0-2.84ZM6.5 8a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"/></svg>
+      <span class="badge" hidden></span>
+    </button>
+    <aside id="fares" class="drawer" hidden>
+      <div class="drawer-head"><h2>Fares</h2><button class="icon-btn" id="fares-close" title="Close">×</button></div>
+      <div class="drawer-body">
+        <div class="hint">Change the prices and add discounts to see what the journeys would cost. Your changes are kept in this
+          browser and only change your own searches.</div>
+        <div class="fares-tools">
+          <button class="text" id="fares-reset">Reset all</button>
+          <button class="text" id="fares-export" title="Your changes as a JSON file, for the fares setting of the server and route_trips.py">Export</button>
+          <button class="text" id="fares-import" title="Changes exported before">Import</button>
+          <input type="file" id="fares-file" accept=".json,application/json" hidden>
+        </div>
+        <div id="fares-main"></div>
+      </div>
+    </aside>
   </main>
 </div>
+<footer class="footer">
+  <button id="methods-open">Methods and sources →</button>
+  <a href="https://github.com/AuroreSallard/swiss-pt-explorer" target="_blank" rel="noopener noreferrer">Source code →</a>
+</footer>
+<dialog id="methods" aria-labelledby="methods-title">
+  <div class="drawer-head"><h2 id="methods-title">Methods and sources</h2><button class="icon-btn" id="methods-close" title="Close">×</button></div>
+  <div class="methods-body">
+    <p>For each journey, this map shows the route, the price of the ticket, how crowded each vehicle is, and who the
+      other passengers are. The route comes from the official timetable; the crowding and the passengers from a
+      simulation of the whole Swiss population; the price from a model of the Swiss fares.</p>
+
+    <h3>Finding a journey</h3>
+    <p>The timetable is a long list of <em>connections</em>: a vehicle leaving one stop at a given time and arriving at the
+      next one. The router goes through the connections of the day in order of departure (the Connection Scan
+      Algorithm) and keeps, for each stop, the best way found so far to reach it.</p>
+    <p>"Best routes" (the default) weighs every minute by how unpleasant it is, with the weights of the Swiss transport
+      model <a href="https://github.com/eqasim-org/eqasim-switzerland/tree/cmdp" target="_blank" rel="noopener">eqasim-switzerland</a>: a minute on a train counts 1, on a tram or
+      metro 1.12, on a bus 1.58, a minute waiting 1.72 and walking 1.97, and each change adds 6 to 13 minutes. So a slightly
+      longer journey with fewer changes and less walking can win. "Fastest" only looks at the arrival time.</p>
+    <p>You can walk between stops up to 400 m apart, and from your start (or to your destination) to the stops within
+      800 m, at 1.2 m/s.</p>
+
+    <h3>Prices</h3>
+    <p>Swiss fares are fragmented: a journey can combine SBB trains, priced by distance, the zones of one or several
+      regional fare networks (ZVV in Zürich, Unireso in Geneva...) and local operators. There is no single price list, so
+      the ticket is rebuilt from these pieces, following a simplified version of the
+      <a href="https://www.allianceswisspass.ch/de/tarife-vorschriften/uebersicht" target="_blank" rel="noopener">official tariffs</a>:</p>
+    <ul>
+      <li>each ride belongs to the fare networks of its stops, and the zones its track crosses;</li>
+      <li>a network covering the whole journey prices it; otherwise each part is priced by its own network;</li>
+      <li>zone networks charge by number of zones, the SBB by tariff kilometres, and rides in no network by distance;</li>
+      <li>then come the half-fare card, discounts, 1st class, and free travel (GA, under 6, Junior card, Gleis 7, your
+        zone subscriptions).</li>
+    </ul>
+    <p>Prices are estimates and can differ from the real ticket. With the tag button, you can change the fares and add
+      discounts yourself and see what every journey would cost.</p>
+
+    <h3>Crowding</h3>
+    <p>A <a href="https://github.com/eqasim-org/eqasim-switzerland/tree/cmdp" target="_blank" rel="noopener">MATSim simulation</a> lets a synthetic population of Switzerland
+      travel through a whole day. Counting the simulated people who board and leave each vehicle gives its load between
+      stops, compared with its capacity (seats and standing room). The loads are averaged by line, pair of stations and
+      hour, and a ride shows its most crowded section:</p>
+    <table>
+      <tr><th>Icons</th><th>Occupancy</th></tr>
+      <tr><td>one person</td><td>below 50 % of the capacity</td></tr>
+      <tr><td>two people</td><td>50 to 80 %</td></tr>
+      <tr><td>three people</td><td>above 80 %</td></tr>
+    </table>
+    <p>The simulation only covers its own area: on lines leaving it, the passengers from outside are missing.</p>
+
+    <h3>Who the other passengers are</h3>
+    <p>The same simulation describes the people on board with you: age, sex, employment, trip purpose, travelcard, car
+      availability, income and type of home municipality, in the morning peak (06:00–09:00), the evening peak
+      (16:00–19:00) or off-peak. Each bar is compared with all public transport in the same period. When fewer than 30
+      simulated people are found, the search widens to the whole day, then to the whole line. These are simulated people,
+      not real passengers.</p>
+
+    <h3>Tracks and zones</h3>
+    <p>Trains are drawn along the rail lines of the SBB
+      (<a href="https://data.sbb.ch/explore/dataset/linie-mit-polygon/information/" target="_blank" rel="noopener">Linie mit Polygon</a>),
+      buses along the routes of the eqasim-switzerland network, and the other vehicles as straight lines. The fare zones
+      are drawn from the map of the fare networks
+      (<a href="https://data.sbb.ch/explore/dataset/tarifverbundkarte/information/" target="_blank" rel="noopener">Tarifverbundkarte</a>)
+      and the zones of the stops.</p>
+
+    <h3>Sources</h3>
+    <ul>
+      <li>Timetable: the official Swiss GTFS feed (<a href="https://opentransportdata.swiss/" target="_blank" rel="noopener">opentransportdata.swiss</a>).</li>
+      <li>Simulation, route-choice weights and fare inputs: <a href="https://github.com/eqasim-org/eqasim-switzerland/tree/cmdp" target="_blank" rel="noopener">eqasim-switzerland</a>.</li>
+      <li>Rail lines and fare networks: <a href="https://data.sbb.ch/" target="_blank" rel="noopener">SBB open data</a>.</li>
+      <li>Fares: <a href="https://www.allianceswisspass.ch/de/tarife-vorschriften/uebersicht" target="_blank" rel="noopener">Alliance SwissPass</a>.</li>
+      <li>Map: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors,
+        <a href="https://leafletjs.com/" target="_blank" rel="noopener">Leaflet</a>; address search:
+        <a href="https://photon.komoot.io/" target="_blank" rel="noopener">Photon</a>.</li>
+    </ul>
+  </div>
+</dialog>
 
 <script>
 const MODES = {
@@ -423,8 +572,8 @@ function showDay() {
 
 // ---------------------------------------------------------------- profile: travelcards and zone subscriptions, kept in the browser
 const PROFILE_KEY = "gtfs-router-profile";
-const CARDS = ["halbtax", "ga", "junior_abo", "gleis7_abo"];
-const profile = Object.assign({optimize: "cost", min_change: 0, age: 30, halbtax: false, ga: false, junior_abo: false, gleis7_abo: false, subs: {}}, (() => {
+const CARDS = ["student", "halbtax", "ga", "junior_abo", "gleis7_abo"];
+const profile = Object.assign({optimize: "cost", min_change: 0, age: 30, student: false, halbtax: false, ga: false, junior_abo: false, gleis7_abo: false, subs: {}}, (() => {
   try { return JSON.parse(localStorage.getItem(PROFILE_KEY)) || {}; } catch { return {}; }
 })());
 const networkZones = {};   // network -> its zones, from the API
@@ -452,8 +601,10 @@ $("age").value = profile.age;
 $("age").oninput = () => { profile.age = Math.max(0, parseInt($("age").value) || 0); saveProfile(); };
 for (const k of CARDS) { $(k).checked = profile[k]; $(k).onchange = () => { profile[k] = $(k).checked; saveProfile(); }; }
 
-const openProfile = () => { $("profile").hidden = false; $("profile-btn").hidden = true; };
-const closeProfile = () => { closeZoneEditor(); $("profile").hidden = true; $("profile-btn").hidden = false; };
+// one drawer at a time, over the buttons
+const showButtons = on => { $("profile-btn").hidden = !on; $("fares-btn").hidden = !on || !fares.base; };
+const openProfile = () => { closeFares(); $("profile").hidden = false; showButtons(false); };
+const closeProfile = () => { closeZoneEditor(); $("profile").hidden = true; showButtons(true); };
 $("profile-btn").onclick = openProfile;
 $("profile-close").onclick = closeProfile;
 
@@ -545,6 +696,209 @@ fetch("/api/networks").then(r => r.json()).then(list => {
 saveProfile(false);
 document.querySelectorAll(".options input").forEach(i => i.onchange = () => state.from && state.to && searchRoutes());
 
+// ---------------------------------------------------------------- fares: the price editor
+// the fares of the server (/api/fares) and the changes to them, kept in the browser and sent with each search: "sbb",
+// "default", "discounts" and the changed networks of "networks", each one whole; a part changed back is left out
+const FARES_KEY = "gtfs-router-fares";
+const fares = {base: null, network: null, changes: (() => {
+  try { return JSON.parse(localStorage.getItem(FARES_KEY)) || {}; } catch { return {}; }
+})()};
+const clone = x => JSON.parse(JSON.stringify(x));
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const NET_LABEL = n => n === "None" ? "Distance-based (no network)" : n;
+const current = key => key in fares.changes ? fares.changes[key] : fares.base[key];
+const currentNetwork = n => ({...fares.base.networks[n], ...(fares.changes.networks || {})[n]});   // a change saved before a new field: its value from the server
+const sectionKey = s => s.startsWith("networks:") ? ["networks", s.slice(9)] : s;   // "networks:ZVV" -> ["networks", "ZVV"]
+const isChanged = key => Array.isArray(key) ? key[1] in (fares.changes.networks || {}) : key in fares.changes;
+const changeCount = () => ["sbb", "default", "discounts"].filter(k => k in fares.changes).length + Object.keys(fares.changes.networks || {}).length;
+const faresParam = () => changeCount() ? JSON.stringify(fares.changes) : "";
+
+function setChange(key, value) {   // key: "sbb", "default", "discounts" or ["networks", name]
+  if (Array.isArray(key)) {
+    const nets = {...(fares.changes.networks || {})};
+    if (same(value, fares.base.networks[key[1]])) delete nets[key[1]]; else nets[key[1]] = value;
+    if (Object.keys(nets).length) fares.changes.networks = nets; else delete fares.changes.networks;
+  } else if (same(value, fares.base[key])) delete fares.changes[key];
+  else fares.changes[key] = value;
+  saveFares();
+}
+function saveFares(search = true) {
+  try { localStorage.setItem(FARES_KEY, JSON.stringify(fares.changes)); } catch {}
+  const n = changeCount(), badge = document.querySelector("#fares-btn .badge");
+  badge.hidden = !n; badge.textContent = n;
+  $("fares-reset").disabled = $("fares-export").disabled = !n;
+  document.querySelectorAll("#fares-main .fsec").forEach(s => s.classList.toggle("changed", isChanged(sectionKey(s.dataset.section))));
+  if ($("fare-network")) [...$("fare-network").options].forEach(o => o.textContent = NET_LABEL(o.value) + (isChanged(["networks", o.value]) ? " · changed" : ""));
+  if (!search) return;   // drawing the editor again keeps the search a change asked for
+  clearTimeout(saveFares.timer);
+  saveFares.timer = setTimeout(() => state.from && state.to && searchRoutes(), 400);
+}
+
+const numIn = (path, value, extra = "") =>
+  `<input type="number" step="any" ${extra.includes("data-negative") ? "" : 'min="0"'} data-path="${esc(path)}" value="${value ?? ""}" ${extra}>`;
+const netSummary = nets => nets.length ? `Applies to ${nets.map(NET_LABEL).join(", ")}` : "Applies to all networks";
+const STUDENT = [["", "Everyone"], ["true", "Students only"], ["false", "Non-students only"]];
+
+function renderFares() {
+  if (!fares.base) return;
+  const section = (key, title, hint, body) => {
+    const id = [].concat(key).join(":");
+    return `<section class="fsec ${isChanged(key) ? "changed" : ""}" data-section="${esc(id)}">
+      <div class="fsec-head"><h3>${title}</h3><button class="text reset" data-action="reset" data-section="${esc(id)}">Reset</button></div>
+      <div class="hint" style="margin: 0 0 8px">${hint}</div>${body}</section>`;
+  };
+  const everyNetwork = ["SBB", ...Object.keys(fares.base.networks), "None"];
+  const discounts = current("discounts").map((d, k) => `<div class="discount">
+      <div class="drow"><input class="dname" data-kind="text" data-path="disc.${k}.name" value="${esc(d.name)}" maxlength="60" aria-label="Name of the discount">
+        <button class="icon-btn" data-action="remove-discount" data-k="${k}" title="Remove this discount">×</button></div>
+      <div class="drow"><span>−</span>${numIn(`disc.${k}.percent`, d.percent, 'max="100"')}<span>% · age</span>
+        ${numIn(`disc.${k}.age_min`, d.age_min, 'step="1" max="120" placeholder="any" data-optional="1"')}<span>to</span>
+        ${numIn(`disc.${k}.age_max`, d.age_max, 'step="1" max="120" placeholder="any" data-optional="1"')}</div>
+      <div class="drow"><select data-path="disc.${k}.student" aria-label="Who">${STUDENT.map(([v, label]) =>
+        `<option value="${v}" ${String(d.student ?? "") === v ? "selected" : ""}>${label}</option>`).join("")}</select></div>
+      <details><summary>${esc(netSummary(d.networks))}</summary><div class="nets">${everyNetwork.map(n =>
+        `<label><input type="checkbox" data-path="disc.${k}.networks" value="${esc(n)}" ${d.networks.includes(n) ? "checked" : ""}>${esc(NET_LABEL(n))}</label>`).join("")}</div></details>
+    </div>`).join("");
+  const sbb = current("sbb"), def = current("default");
+  if (!fares.network || !fares.base.networks[fares.network]) fares.network = "ZVV" in fares.base.networks ? "ZVV" : Object.keys(fares.base.networks)[0];
+  const n = fares.network, net = currentNetwork(n);
+  const netBody = !net ? "" : net.kind === "center"
+    ? `<table class="ftable"><tr><th></th><th>Full price</th><th>Half-fare</th></tr>
+       <tr><td>Centre zone (${esc(net.center_zone)})</td><td>${numIn("net.center", net.center, `data-net="${esc(n)}"`)}</td>
+         <td>${numIn("net.center_halbtax", net.center_halbtax, `data-net="${esc(n)}"`)}</td></tr>
+       <tr><td>Each other zone</td><td>${numIn("net.additional", net.additional, `data-net="${esc(n)}"`)}</td>
+         <td>${numIn("net.additional_halbtax", net.additional_halbtax, `data-net="${esc(n)}"`)}</td></tr></table>`
+    : `<table class="ftable"><tr><th>Zones</th><th>Full price</th><th>Half-fare</th></tr>${net.full.map((p, i) =>
+        `<tr><td>${i + 1}${i === net.full.length - 1 ? " or more" : ""}</td><td>${numIn(`net.full.${i}`, p, `data-net="${esc(n)}"`)}</td>
+         <td>${numIn(`net.halbtax.${i}`, net.halbtax[i] ?? net.halbtax[net.halbtax.length - 1], `data-net="${esc(n)}"`)}</td></tr>`).join("")}</table>
+       <div class="fares-tools"><button class="text" data-action="add-zone">+ One more zone</button>
+         <button class="text" data-action="remove-zone" ${net.full.length < 2 ? "disabled" : ""}>− Remove the last</button></div>
+       ${net.double.length ? `<div class="hint">Zones counting as two: ${esc(net.double.join(", "))}</div>` : ""}`;
+  $("fares-main").innerHTML =
+    section("discounts", "Discounts",
+      "The largest discount that applies to a ticket is taken (they don't add up), on top of the half-fare card. Free travel (GA, under 6, Junior, Gleis 7) stays free. Set your age and student status in your profile.",
+      discounts + `<button class="text" data-action="add-discount">+ Add a discount</button>`)
+    + section(["networks", n], "Fare networks", "The price of a ticket by number of zones (or, in Unireso, around the centre zone).",
+      `<select id="fare-network" aria-label="Fare network">${Object.keys(fares.base.networks).map(k =>
+        `<option value="${esc(k)}" ${k === n ? "selected" : ""}>${esc(k)}${isChanged(["networks", k]) ? " · changed" : ""}</option>`).join("")}</select>${netBody}`)
+    + section("sbb", "SBB, by distance", "Each kilometre is charged at the price of its band; the total is rounded up, and halved with the half-fare card, but never below the minimum.",
+      `<div class="frow"><span>Minimum price</span>${numIn("sbb.minimum", sbb.minimum)}</div>
+       <div class="frow"><span>Minimum, half-fare</span>${numIn("sbb.minimum_halbtax", sbb.minimum_halbtax)}</div>
+       <table class="ftable"><tr><th>Band</th><th>From km</th><th>To km</th><th>CHF per km</th><th></th></tr>${sbb.bands.map((b, i) =>
+        `<tr><td>${i + 1}</td><td>${numIn(`sbb.bands.${i}.from_km`, b.from_km)}</td><td>${numIn(`sbb.bands.${i}.to_km`, b.to_km)}</td>
+         <td>${numIn(`sbb.bands.${i}.chf_per_km`, b.chf_per_km)}</td>
+         <td><button class="icon-btn" data-action="remove-band" data-i="${i}" title="Remove this band" ${sbb.bands.length < 2 ? "disabled" : ""}>×</button></td></tr>`).join("")}</table>
+       <button class="text" data-action="add-band">+ Add a band</button>`)
+    + section("default", "Outside the fare networks", "Rides in no fare network: a fixed part, plus a price per km, plus a price per km² (negative: cheaper per km on long rides).",
+      `<div class="frow"><span>Fixed part (CHF)</span>${numIn("default.flat", def.flat)}</div>
+       <div class="frow"><span>Per km</span>${numIn("default.per_km", def.per_km)}</div>
+       <div class="frow"><span>Per km²</span>${numIn("default.per_km2", def.per_km2, 'data-negative="1"')}</div>`);
+  saveFares(false);
+}
+
+function fareInput(e) {   // a value typed or chosen: the change stored, without drawing the editor again
+  const el = e.target, path = el.dataset.path;
+  if (!path || !fares.base) return;
+  const [part, ...rest] = path.split(".");
+  let value;
+  if (el.type === "checkbox") value = null;
+  else if (el.dataset.kind === "text") value = el.value;
+  else if (el.tagName === "SELECT") value = el.value === "" ? null : el.value === "true";
+  else if (el.value.trim() === "" && el.dataset.optional) { value = null; el.classList.remove("bad"); }
+  else {
+    value = Number(el.value);
+    const ok = el.value.trim() !== "" && isFinite(value) && (value >= 0 || el.dataset.negative) && (el.max === "" || value <= +el.max);
+    el.classList.toggle("bad", !ok);
+    if (!ok) return;
+  }
+  if (part === "net") {
+    const n = el.dataset.net, obj = clone(currentNetwork(n));
+    if (rest.length === 2) {   // a price of a list, which may be shorter than the other one: filled with its last price
+      const list = obj[rest[0]];
+      while (list.length < +rest[1]) list.push(list[list.length - 1]);
+      list[+rest[1]] = value;
+    } else obj[rest[0]] = value;
+    setChange(["networks", n], obj);
+  } else if (part === "disc") {
+    const list = clone(current("discounts")), d = list[+rest[0]], key = rest[1];
+    if (key === "networks") {
+      d.networks = [...el.closest(".nets").querySelectorAll("input:checked")].map(c => c.value);
+      el.closest("details").querySelector("summary").textContent = netSummary(d.networks);
+    } else d[key] = key.startsWith("age_") && value !== null ? Math.round(value) : value;
+    setChange("discounts", list);
+  } else {   // sbb, default
+    const obj = clone(current(part));
+    if (rest.length === 3) obj[rest[0]][+rest[1]][rest[2]] = value; else obj[rest[0]] = value;
+    setChange(part, obj);
+  }
+}
+$("fares-main").addEventListener("input", fareInput);
+$("fares-main").addEventListener("change", e => {
+  if (e.target.id === "fare-network") { fares.network = e.target.value; renderFares(); }
+  else fareInput(e);
+});
+$("fares-main").onclick = e => {   // the buttons that add, remove or reset: the editor drawn again
+  const b = e.target.closest("[data-action]");
+  if (!b || b.disabled) return;
+  const action = b.dataset.action, n = fares.network;
+  if (action === "reset") {
+    const key = sectionKey(b.dataset.section);
+    setChange(key, Array.isArray(key) ? fares.base.networks[key[1]] : fares.base[key]);
+  } else if (action === "add-discount") {
+    setChange("discounts", [...clone(current("discounts")), {name: "Student discount", percent: 25, age_min: null, age_max: null, student: true, networks: []}]);
+  } else if (action === "remove-discount") {
+    setChange("discounts", current("discounts").filter((_, k) => k !== +b.dataset.k));
+  } else if (action === "add-band" || action === "remove-band") {
+    const sbb = clone(current("sbb")), last = sbb.bands[sbb.bands.length - 1];
+    if (action === "add-band") sbb.bands.push({from_km: last.to_km + 1, to_km: last.to_km + 100, chf_per_km: last.chf_per_km});
+    else sbb.bands.splice(+b.dataset.i, 1);
+    setChange("sbb", sbb);
+  } else if (action === "add-zone" || action === "remove-zone") {
+    const net = clone(currentNetwork(n));
+    for (const key of ["full", "halbtax"]) {
+      if (action === "add-zone") net[key].push(net[key][net[key].length - 1]); else if (net[key].length > 1) net[key].pop();
+    }
+    setChange(["networks", n], net);
+  }
+  renderFares();
+};
+
+$("fares-reset").onclick = () => { fares.changes = {}; renderFares(); saveFares(); };
+$("fares-export").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(fares.changes, null, 2)], {type: "application/json"}));
+  a.download = "fares.json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$("fares-import").onclick = () => $("fares-file").click();
+$("fares-file").onchange = async () => {
+  const file = $("fares-file").files[0];
+  $("fares-file").value = "";
+  if (!file) return;
+  try {
+    const changes = JSON.parse(await file.text());
+    if (!changes || typeof changes !== "object" || Array.isArray(changes)) throw new Error("not a JSON object");
+    fares.changes = {};
+    for (const key of ["sbb", "default", "discounts"]) if (key in changes) setChange(key, changes[key]);
+    for (const [n, value] of Object.entries(changes.networks || {})) if (n in fares.base.networks) setChange(["networks", n], value);
+    renderFares(); saveFares();
+  } catch (err) { alert(`This file can't be read as fares: ${err.message}`); }
+};
+
+const openFares = () => { closeProfile(); renderFares(); $("fares").hidden = false; showButtons(false); };
+function closeFares() { if ($("fares").hidden) return; $("fares").hidden = true; showButtons(true); }
+$("fares-btn").onclick = openFares;
+$("fares-close").onclick = closeFares;
+
+fetch("/api/fares").then(r => r.ok ? r.json() : null).then(base => {
+  if (!base) return;   // a server without prices
+  fares.base = base;
+  for (const n of Object.keys(fares.changes.networks || {})) if (!(n in base.networks)) delete fares.changes.networks[n];   // gone from the server
+  showButtons($("profile").hidden && $("fares").hidden);
+  saveFares(false);
+}).catch(() => {});
+
 // ---------------------------------------------------------------- autocomplete: stations of the feed, then addresses (Photon)
 function autocomplete(which) {
   const input = $(which), list = input.nextElementSibling;
@@ -622,6 +976,7 @@ async function searchRoutes() {
   if (profile.min_change > 0) params.set("min_change", profile.min_change);
   if (subscriptionsParam()) params.set("subscriptions", subscriptionsParam());
   if ($("first_class").value) params.set("first_class", "true");
+  if (faresParam()) params.set("fares", faresParam());
   const vias = state.vias.filter(v => state[v]);   // the empty fields are left out
   const stayOf = v => Math.max(0, parseInt($(`${v}-stay`).value) || 0);
   vias.forEach(v => { params.append("via", state[v].query); params.append("stay", stayOf(v)); });
@@ -720,7 +1075,7 @@ function renderResults() {
       <div class="sub">
         <span>${j.legs.some(l => l.kind === "ride") ? (j.changes ? `${j.changes} change${j.changes > 1 ? "s" : ""}` : "Direct") : "On foot"}</span>
         ${firstRide(j) ? `<span>from ${esc(firstRide(j).from.name)} at ${firstRide(j).dep}</span>` : ""}
-        ${j.price ? `<span class="price">${j.price.chf ? `CHF ${j.price.chf.toFixed(2)}` : "Free"}</span>` : ""}
+        ${j.price ? `<span class="price ${state.params && state.params.has("fares") ? "edited" : ""}" ${state.params && state.params.has("fares") ? 'title="With your fares"' : ""}>${j.price.chf ? `CHF ${j.price.chf.toFixed(2)}` : "Free"}</span>` : ""}
       </div>
       ${i === state.selected && state.expanded ? timeline(j) : ""}
     </div>`).join("");
@@ -846,7 +1201,7 @@ function timeline(j) {
     previous = l;
   });
   html += `</div>`;
-  if (j.price) html += `<div class="pricebox">CHF ${j.price.chf.toFixed(2)} · ${esc(j.price.rule)} · ${j.price.network_km} km</div>`;
+  if (j.price) html += `<div class="pricebox">CHF ${j.price.chf.toFixed(2)} · ${esc(j.price.rule)} · ${j.price.network_km} km${state.params && state.params.has("fares") ? " · with your fares" : ""}</div>`;
   return html;
 }
 
@@ -877,6 +1232,11 @@ function drawJourney(fit) {
   }
   if (fit && all.length) map.fitBounds(L.latLngBounds(all), {padding: [40, 40]});
 }
+
+// ---------------------------------------------------------------- the methods, from the line at the bottom
+$("methods-open").onclick = () => $("methods").showModal();
+$("methods-close").onclick = () => $("methods").close();
+$("methods").onclick = e => { if (e.target === $("methods")) $("methods").close(); };   // a click beside the popup
 
 // ---------------------------------------------------------------- start
 fetch("/api/info").then(r => r.json()).then(info => {
