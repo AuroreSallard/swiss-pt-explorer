@@ -1,0 +1,10 @@
+id,departure,origin_stop,destination_stop,origin_lat,origin_lon,destination_lat,destination_lon,age,halbtax
+lausanne_gare_flon,08:00,,,46.5168,6.6291,46.5210,6.6305,30,false
+lausanne_epfl,08:00,,,46.5168,6.6291,46.5191,6.5668,30,false
+lausanne_bercher,08:00,,,46.5210,6.6305,46.6930,6.7090,30,false
+cornavin_annemasse,08:00,8587057,,,,46.1993,6.2366,30,false
+geneva_airport_lausanne,08:00,,,46.2316,6.1093,46.5168,6.6291,30,false
+geneva_airport_lausanne_halbtax,08:00,,,46.2316,6.1093,46.5168,6.6291,30,true
+bern_zurich,08:00,8507000,8503000,,,,,30,false
+plainpalais_carouge,08:00,,,46.1985,6.1424,46.1840,6.1390,30,false
+plainpalais_carouge_child,08:00,,,46.1985,6.1424,46.1840,6.1390,12,false

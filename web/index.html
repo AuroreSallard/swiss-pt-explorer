@@ -1,0 +1,904 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTFS Router</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #ffffff; --text: #202124; --muted: #5f6368; --line: #e3e5e8; --hover: #f4f6f8;
+    --accent: #1a73e8; --accent-soft: #e8f0fe; --shadow: 0 2px 10px rgba(0,0,0,.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1f2124; --panel: #26282b; --text: #e8eaed; --muted: #9aa0a6; --line: #3c4043; --hover: #303236;
+            --accent: #8ab4f8; --accent-soft: #2d3a4e; --shadow: 0 2px 10px rgba(0,0,0,.5); }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: var(--bg); }
+  #app { display: flex; height: 100%; }
+  #panel { width: 400px; flex: none; background: var(--panel); display: flex; flex-direction: column; box-shadow: var(--shadow); z-index: 1000; }
+  #mapwrap { flex: 1; position: relative; }
+  #map { position: absolute; inset: 0; }
+
+  #profile-btn { position: absolute; top: 14px; right: 14px; z-index: 1001; width: 52px; height: 52px; border-radius: 50%; border: none;
+                 background: var(--panel); color: var(--text); box-shadow: var(--shadow); cursor: pointer; display: grid; place-items: center; }
+  #profile-btn:hover { background: var(--hover); }
+  #profile-btn svg { width: 30px; height: 30px; }
+  #profile-btn .badge { position: absolute; top: -2px; right: -2px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px;
+                        background: var(--accent); color: var(--bg); font-size: 12px; font-weight: 700; line-height: 20px; }
+  .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 380px; max-width: 100%; z-index: 1002; background: var(--panel);
+            box-shadow: var(--shadow); display: flex; flex-direction: column; }
+  .drawer-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .drawer-head h2 { font-size: 16px; margin: 0; flex: 1; }
+  .icon-btn { width: 32px; height: 32px; border-radius: 50%; border: none; background: none; color: var(--muted); font-size: 20px; cursor: pointer; }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+  .drawer-body { flex: 1; overflow: auto; padding: 4px 16px 16px; }
+  .drawer h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 8px; }
+  .drawer input[type=number], .drawer input[type=search], .drawer select { padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px;
+            background: var(--bg); color: var(--text); font: inherit; }
+  .toggle { display: flex; align-items: center; gap: 10px; padding: 7px 0; cursor: pointer; }
+  .toggle span { flex: 1; }
+  .toggle small { display: block; color: var(--muted); font-size: 12px; }
+  .toggle input { width: 18px; height: 18px; accent-color: var(--accent); }
+  .subscription { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; }
+  .subscription .what { flex: 1; min-width: 0; }
+  .subscription .what b { display: block; }
+  .subscription .what small { color: var(--muted); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subscription button.text, .zone-head button.text { border: none; background: none; color: var(--accent); font: inherit; cursor: pointer; padding: 4px; }
+  #sub-network { width: 100%; }
+  .zone-tools { display: flex; flex-direction: column; gap: 8px; position: sticky; top: 0; background: var(--panel); padding: 12px 0 8px; }
+  .zone-tools .count { color: var(--muted); font-size: 12px; }
+  #zone-list { list-style: none; margin: 0; padding: 0; }
+  #zone-list label { display: flex; gap: 10px; align-items: flex-start; padding: 6px 4px; border-radius: 6px; cursor: pointer; }
+  #zone-list label:hover { background: var(--hover); }
+  #zone-list input { margin-top: 3px; accent-color: var(--accent); }
+  #zone-list .zid { font-weight: 700; min-width: 42px; }
+  #zone-list small { color: var(--muted); display: block; }
+  .zone-label { background: none; border: none; box-shadow: none; font-weight: 700; color: #174ea6; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
+  .zone-label::before { display: none; }
+  header { padding: 16px 16px 12px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 16px; margin: 0 0 12px; font-weight: 600; }
+  h1 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+
+  .places { position: relative; display: grid; grid-template-columns: 20px 1fr; gap: 8px 8px; align-items: center; padding-right: 44px; }
+  .dot.via { width: 9px; height: 9px; border-color: var(--muted); background: var(--muted); }
+  .field .remove-via { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); border: none; background: none;
+                       color: var(--muted); font-size: 18px; cursor: pointer; padding: 2px 6px; }
+  .field .remove-via:hover { color: var(--text); }
+  .field input.via-input { padding-right: 112px; }
+  .field .stay-box { position: absolute; right: 30px; top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 3px;
+                     color: var(--muted); font-size: 12px; }
+  .field .stay-box input { width: 48px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg);
+                           color: var(--text); font: inherit; text-align: right; }
+
+  .add-via { border: none; background: none; color: var(--accent); font: inherit; font-size: 13px; padding: 6px 0 0 28px; cursor: pointer; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; margin: auto; border: 2px solid var(--muted); }
+  .dot.to { border-radius: 2px; border-color: #d93025; background: #d93025; }
+  .field { position: relative; }
+  .field input { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+  .field input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .field input.armed { outline: 2px dashed var(--accent); }
+  #swap { position: absolute; right: 0; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; border-radius: 50%; border: none; background: none; color: var(--muted); font-size: 18px; cursor: pointer; }
+  #swap:hover { background: var(--hover); }
+  .suggest { position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; background: var(--panel); border-radius: 8px; box-shadow: var(--shadow); list-style: none; padding: 4px 0; z-index: 10; max-height: 320px; overflow: auto; }
+  .suggest li { padding: 7px 12px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
+  .suggest li small { color: var(--muted); margin-left: auto; white-space: nowrap; }
+  .suggest li.on, .suggest li:hover { background: var(--hover); }
+
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .row label { color: var(--muted); }
+  .row input[type=text], .row input[type=number] { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+  .row input[type=number] { width: 64px; }
+  .row select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+  button.primary { margin-left: auto; padding: 8px 18px; border: none; border-radius: 18px; background: var(--accent); color: var(--bg); font: inherit; font-weight: 600; cursor: pointer; }
+  button.primary:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+
+  #results { flex: 1; overflow: auto; }
+  #date-text { width: 8.2em; }
+  #time { width: 4.2em; text-align: center; }
+  .datefield { position: relative; }
+  .cal { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; background: var(--panel); border-radius: 10px; box-shadow: var(--shadow); padding: 10px; width: 252px; }
+  .cal .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-weight: 600; }
+  .cal .head button { border: none; background: none; color: var(--text); font: inherit; font-size: 18px; width: 30px; height: 30px; border-radius: 15px; cursor: pointer; }
+  .cal .head button:hover:not(:disabled) { background: var(--hover); }
+  .cal .head button:disabled { color: var(--line); cursor: default; }
+  .cal .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+  .cal .wd { color: var(--muted); font-size: 12px; padding: 4px 0; }
+  .cal .grid button { border: none; background: none; color: var(--text); font: inherit; height: 32px; border-radius: 16px; cursor: pointer; }
+  .cal .grid button:hover:not(:disabled) { background: var(--hover); }
+  .cal .grid button.today { box-shadow: inset 0 0 0 1px var(--accent); }
+  .cal .grid button.on { background: var(--accent); color: var(--bg); }
+  .cal .grid button:disabled { color: var(--line); cursor: default; }
+  .msg { padding: 24px 16px; color: var(--muted); text-align: center; }
+  button.more { display: block; width: 100%; padding: 10px 16px; border: none; border-bottom: 1px solid var(--line); background: none; color: var(--accent); font: inherit; cursor: pointer; text-align: center; }
+  button.more.later { border-bottom: none; border-top: 1px solid var(--line); }
+  button.more:hover:not(:disabled) { background: var(--hover); }
+  button.more:disabled { color: var(--muted); cursor: default; }
+  .card { padding: 14px 16px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .card:hover { background: var(--hover); }
+  .card.on { background: var(--accent-soft); }
+  .card .top { display: flex; align-items: baseline; gap: 8px; }
+  .card .times { font-size: 16px; font-weight: 600; }
+  .card .dur { margin-left: auto; font-weight: 600; }
+  .card .sub { color: var(--muted); margin-top: 4px; display: flex; gap: 10px; }
+  .card .sub > span { white-space: nowrap; }
+  .card .sub > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }   /* a long stop name is cut */
+  .card .price { margin-left: auto; color: var(--text); font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 4px; color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .chip.walk { background: none; color: var(--muted); padding: 2px 0; }
+  .crowd { display: inline-flex; gap: 1px; vertical-align: middle; margin-left: 3px; }
+  .crowd svg { width: 9px; height: 13px; }
+  .crowd .on { fill: var(--cc); }
+  .crowd .off { fill: none; stroke: var(--muted); stroke-width: 1.1; }
+  .l1 { --cc: #2e7d32; } .l2 { --cc: #ef6c00; } .l3 { --cc: #c62828; }
+  .cdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--cc, transparent); }
+  .sep { color: var(--muted); font-size: 11px; }
+
+  .timeline { margin-top: 12px; cursor: default; }
+  .tl { display: grid; grid-template-columns: 46px 18px 1fr; column-gap: 8px; }
+  .tl .t { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .tl .t.dep { font-weight: 700; color: var(--text); }       /* the departure of a vehicle: the time to catch */
+  .tl .t.end { font-weight: 700; color: var(--text); }       /* the arrival at the destination */
+  .tl .bar { position: relative; display: flex; justify-content: center; }
+  /* the line of the timeline, drawn in two halves at a stop (above and below its dot) or whole between stops */
+  .tl .seg { position: absolute; left: 50%; transform: translateX(-50%); }
+  .tl .seg.top { top: 0; height: 10px; }
+  .tl .seg.bottom { top: 10px; bottom: 0; }
+  .tl .seg.full { top: 0; bottom: 0; }
+  .tl .seg.ride { width: 5px; background: var(--sc); }
+  .tl .seg.ride.top { border-radius: 0 0 3px 3px; }
+  .tl .seg.ride.bottom { border-radius: 3px 3px 0 0; }
+  .tl .seg.walk { width: 0; border-left: 3px dotted var(--muted); }
+  .tl .seg.wait { width: 0; border-left: 3px solid var(--line); }
+  .tl .node { width: 12px; height: 12px; border-radius: 50%; background: var(--panel); border: 3px solid var(--c, var(--muted)); z-index: 1; margin-top: 3px; }
+  .tl .what.conn { padding: 4px 0 12px; }
+  .tl .what { padding-bottom: 14px; }
+  .tl .name { font-weight: 600; }
+  .tl .info { color: var(--muted); font-size: 13px; }
+  .tl .stops { color: var(--muted); font-size: 12px; margin: 4px 0 0; padding-left: 0; list-style: none; }   /* the crowding dot is the marker */
+  /* who travels here: one bar per category (share of the people on board), a tick for all public transport in the period */
+  .profile { margin-top: 4px; font-size: 12px; }
+  .profile .pnote { color: var(--muted); }
+  .profile .pkey { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); margin-top: 4px; align-items: center; }
+  .profile .pkey i { display: inline-block; vertical-align: middle; margin-right: 4px; }
+  .profile .pkey .kfill { width: 14px; height: 8px; border-radius: 0 4px 4px 0; background: var(--accent); }
+  .profile .pkey .ktick { width: 2px; height: 12px; border-radius: 1px; background: var(--text); }
+  .profile .pdim { margin-top: 8px; }
+  .profile .pname { font-weight: 600; color: var(--text); margin-bottom: 2px; }
+  .profile .prow { display: grid; grid-template-columns: minmax(0, 10.5em) 1fr 2.6em; align-items: center; gap: 6px; height: 18px; }
+  .profile .plab { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .profile .ptrack { position: relative; height: 8px; border-radius: 4px; background: var(--hover); }
+  .profile .pfill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0 4px 4px 0; background: var(--accent); }
+  .profile .ptick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text); }
+  .profile .pval { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  .tl button.link { display: block; border: none; background: none; color: var(--accent); padding: 0; font: inherit; font-size: 13px; cursor: pointer; }
+  .pricebox { margin: 4px 0 0 72px; color: var(--muted); font-size: 12px; }
+
+  .pin { width: 18px; height: 18px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+  .pin.from { background: #fff; border-color: #202124; }
+  .pin.to { background: #d93025; }
+  .pin.via { width: 14px; height: 14px; background: #5f6368; }
+
+  @media (max-width: 760px) {
+    #app { flex-direction: column-reverse; }
+    #panel { width: 100%; height: 58%; }
+    #mapwrap { height: 42%; flex: none; }
+    .drawer { position: fixed; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="panel">
+    <header>
+      <h1>Public transport <small id="day"></small></h1>
+      <div class="places" id="places">
+        <span class="dot from"></span>
+        <div class="field"><input id="from" placeholder="Choose a starting point, or click the map" autocomplete="off"><ul class="suggest" hidden></ul></div>
+        <span class="dot to" id="to-dot"></span>
+        <div class="field"><input id="to" placeholder="Choose a destination" autocomplete="off"><ul class="suggest" hidden></ul></div>
+        <button id="swap" title="Swap origin and destination">⇅</button>
+      </div>
+      <button id="add-via" class="add-via">+ Add a stop on the way</button>
+      <div class="row">
+        <label for="date-text">Leave</label>
+        <span class="datefield"><input id="date-text" type="text" placeholder="DD-MM-YYYY" autocomplete="off" inputmode="numeric" aria-label="Date (DD-MM-YYYY)"><input id="date" type="hidden"><div class="cal" hidden></div></span>
+        <input id="time" type="text" value="08:00" placeholder="HH:MM" autocomplete="off" inputmode="numeric" maxlength="5" aria-label="Time (HH:MM, 24 h)">
+        <select id="first_class" title="Class"><option value="">2nd class</option><option value="true">1st class</option></select>
+        <button id="go" class="primary" disabled>Search</button>
+      </div>
+      <div class="hint">Type a stop or an address, or click the map to set the start, then the destination. Drag the pins to move them.</div>
+    </header>
+    <div id="results"><div class="msg">Where do you want to go?</div></div>
+  </aside>
+  <main id="mapwrap">
+    <div id="map"></div>
+    <button id="profile-btn" title="Profile: age, travelcards and subscriptions" aria-label="Profile">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 4a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Zm0 14a7.97 7.97 0 0 1-6-2.7c.05-2 4-3.1 6-3.1s5.95 1.1 6 3.1a7.97 7.97 0 0 1-6 2.7Z"/></svg>
+      <span class="badge" hidden></span>
+    </button>
+    <aside id="profile" class="drawer" hidden>
+      <div class="drawer-head"><h2>Your profile</h2><button class="icon-btn" id="profile-close" title="Close">×</button></div>
+      <div class="drawer-body" id="profile-main">
+        <h3>Traveller</h3>
+        <label class="toggle"><span>Age</span><input id="age" type="number" min="0" max="120" value="30" style="width: 80px; height: auto"></label>
+        <h3>Routes</h3>
+        <label class="toggle"><span>Best routes<small>Fewer changes, less walking and waiting</small></span><input type="radio" name="optimize" value="cost"></label>
+        <label class="toggle"><span>Fastest<small>The earliest arrival, whatever the changes</small></span><input type="radio" name="optimize" value="time"></label>
+        <label class="toggle"><span>Minimum transfer time<small>Minutes at least between two vehicles (0: those of the timetable)</small></span><input id="min_change" type="number" min="0" max="60" step="1" value="0" style="width: 80px; height: auto"></label>
+        <h3>Travelcards</h3>
+        <label class="toggle"><span>Half-fare card<small>Half price on most tickets</small></span><input type="checkbox" id="halbtax"></label>
+        <label class="toggle"><span>GA travelcard<small>Everything is free</small></span><input type="checkbox" id="ga"></label>
+        <label class="toggle"><span>Junior card<small>Free under 16 with a parent</small></span><input type="checkbox" id="junior_abo"></label>
+        <label class="toggle"><span>Gleis 7<small>Free from 19:00 to 05:00, under 25</small></span><input type="checkbox" id="gleis7_abo"></label>
+        <h3>Zone subscriptions</h3>
+        <div class="hint" style="margin: 0 0 10px">Rides within your zones are free; going further, you pay for the zones outside them.</div>
+        <div id="subs-list"></div>
+        <select id="sub-network"><option value="">+ Add a subscription…</option></select>
+      </div>
+      <div class="drawer-body" id="zone-editor" hidden>
+        <div class="zone-tools">
+          <div class="zone-head"><button class="text" id="zone-back">← Back</button> <b id="zone-title"></b></div>
+          <label class="toggle"><span>All zones</span><input type="checkbox" id="zone-all"></label>
+          <input type="search" id="zone-filter" placeholder="Filter by zone or place">
+          <div class="count" id="zone-count"></div>
+          <div class="hint" style="margin: 0">Click zones on the map, or tick them below.</div>
+        </div>
+        <ul id="zone-list"></ul>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<script>
+const MODES = {
+  rail: ["#c8102e", "🚆"], tram: ["#2e7d32", "🚊"], bus: ["#1565c0", "🚌"], metro: ["#6a1b9a", "🚇"],
+  boat: ["#00838f", "⛴"], "cable car": ["#e65100", "🚡"], funicular: ["#795548", "🚞"], other: ["#546e7a", "🚐"],
+};
+const mode = m => MODES[m] || MODES.other;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const fmtDur = min => min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")}`;
+
+// ---------------------------------------------------------------- map
+const map = L.map("map", {zoomControl: false}).setView([46.8, 8.2], 8);
+L.control.zoom({position: "bottomright"}).addTo(map);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
+const routeLayer = L.layerGroup().addTo(map);
+
+const state = {from: null, to: null, vias: [], journeys: [], selected: 0};   // a place: {query, name, lat, lon}; vias: the ids of the stops on the way
+const pins = {};
+
+function setPlace(which, place, {search = true} = {}) {
+  state[which] = place;
+  $(which).value = place ? place.name : "";
+  if (pins[which]) { map.removeLayer(pins[which]); delete pins[which]; }
+  if (place) {
+    pins[which] = L.marker([place.lat, place.lon], {
+      draggable: true, icon: L.divIcon({className: "", html: `<div class="pin ${which.startsWith("via") ? "via" : which}"></div>`, iconSize: [18, 18], iconAnchor: [9, 9]}),
+    }).addTo(map).on("dragend", e => {
+      const p = e.target.getLatLng();
+      setPlace(which, pointPlace(p.lat, p.lng));
+    });
+  }
+  $("go").disabled = !(state.from && state.to);
+  if (search && state.from && state.to) searchRoutes();
+  else if (place && !(state.from && state.to)) map.panTo([place.lat, place.lon]);
+}
+const pointPlace = (lat, lon) => ({query: `${lat.toFixed(6)},${lon.toFixed(6)}`, name: `${lat.toFixed(5)}, ${lon.toFixed(5)}`, lat, lon, raw: true});
+
+map.on("click", e => {
+  if (zoneEditor.network) return;   // choosing zones
+  // the start first, then an empty stop on the way, then the destination
+  const which = !state.from ? "from" : state.vias.find(v => !state[v]) || "to";
+  setPlace(which, pointPlace(e.latlng.lat, e.latlng.lng));
+});
+
+$("swap").onclick = () => {   // the whole way reversed, the stops on the way too
+  const order = ["from", ...state.vias, "to"], places = order.map(w => state[w]).reverse();
+  order.forEach((w, i) => setPlace(w, places[i], {search: false}));
+  if (state.from && state.to) searchRoutes();
+};
+
+// ---------------------------------------------------------------- stops on the way
+let viaCount = 0;
+function addVia(place = null, {focus = true, stay = 0} = {}) {
+  const id = `via${viaCount++}`;
+  const dot = document.createElement("span");
+  dot.className = "dot via";
+  const field = document.createElement("div");
+  field.className = "field";
+  field.innerHTML = `<input id="${id}" class="via-input" placeholder="Stop on the way" autocomplete="off"><ul class="suggest" hidden></ul>
+    <label class="stay-box" title="Minutes to stay there (0: just pass through)">stay <input id="${id}-stay" type="number" min="0" step="5"
+      value="${stay || ""}" placeholder="0"> min</label>
+    <button class="remove-via" title="Remove this stop">×</button>`;
+  $("places").insertBefore(dot, $("to-dot"));
+  $("places").insertBefore(field, $("to-dot"));
+  state.vias.push(id);
+  state[id] = place;
+  autocomplete(id);
+  field.querySelector(".remove-via").onclick = () => {
+    if (pins[id]) { map.removeLayer(pins[id]); delete pins[id]; }
+    dot.remove(); field.remove();
+    delete state[id];
+    state.vias = state.vias.filter(v => v !== id);
+    if (state.from && state.to) searchRoutes();
+  };
+  $(`${id}-stay`).onchange = () => state[id] && state.from && state.to && searchRoutes();
+  if (focus) $(id).focus();
+  return id;
+}
+$("add-via").onclick = () => addVia();
+$("go").onclick = () => searchRoutes();
+$("time").onchange = $("first_class").onchange = () => state.from && state.to && searchRoutes();
+$("date").onchange = () => { showDay(); state.from && state.to && searchRoutes(); };
+
+// ---------------------------------------------------------------- date (DD-MM-YYYY, weeks from Monday) and time (24 h)
+// the visible field and the calendar; the ISO date (YYYY-MM-DD) in the hidden #date, with the dates of the feed as min, max
+const isoDate = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const euroDate = iso => iso ? iso.split("-").reverse().join("-") : "";
+function setDate(iso, {search = true} = {}) {
+  const changed = iso !== $("date").value;
+  $("date").value = iso;
+  $("date-text").value = euroDate(iso);
+  if (changed && search) $("date").onchange();
+  else showDay();
+}
+function parseDate(text) {   // DD-MM-YYYY (or with . or /), the year can be left out or short: the ISO date or null
+  const m = text.trim().match(/^(\d{1,2})[-./ ](\d{1,2})(?:[-./ ](\d{2}|\d{4}))?$/);
+  if (!m) return null;
+  const year = m[3] ? (m[3].length === 2 ? 2000 + +m[3] : +m[3]) : +($("date").value || isoDate(new Date())).slice(0, 4);
+  const d = new Date(year, m[2] - 1, m[1]);
+  if (d.getDate() !== +m[1] || d.getMonth() !== m[2] - 1) return null;   // 31-02...
+  const iso = isoDate(d);
+  return (!$("date").min || iso >= $("date").min) && (!$("date").max || iso <= $("date").max) ? iso : null;
+}
+$("date-text").onchange = () => setDate(parseDate($("date-text").value) || $("date").value);   // else back to the date before
+$("date-text").onkeydown = e => { if (e.key === "Enter") $("date-text").blur(); if (e.key === "Escape") closeCalendar(); };
+
+const calendar = document.querySelector(".cal");
+let calMonth = null;   // the first day of the month shown
+function openCalendar() {
+  const d = new Date(($("date").value || isoDate(new Date())) + "T12:00");
+  calMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+  drawCalendar();
+  calendar.hidden = false;
+}
+function closeCalendar() { calendar.hidden = true; }
+function drawCalendar() {
+  const y = calMonth.getFullYear(), m = calMonth.getMonth(), min = $("date").min, max = $("date").max;
+  const lead = (calMonth.getDay() + 6) % 7;   // the days before the 1st from Monday
+  const days = new Date(y, m + 1, 0).getDate(), today = isoDate(new Date());
+  let html = `<div class="head"><button type="button" data-step="-1" ${min && isoDate(new Date(y, m, 0)) < min ? "disabled" : ""} aria-label="Previous month">‹</button>
+    <span>${calMonth.toLocaleDateString("en-GB", {month: "long", year: "numeric"})}</span>
+    <button type="button" data-step="1" ${max && isoDate(new Date(y, m + 1, 1)) > max ? "disabled" : ""} aria-label="Next month">›</button></div>
+    <div class="grid">${["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map(w => `<span class="wd">${w}</span>`).join("")}${"<span></span>".repeat(lead)}`;
+  for (let d = 1; d <= days; d++) {
+    const iso = isoDate(new Date(y, m, d)), off = (min && iso < min) || (max && iso > max);
+    html += `<button type="button" data-iso="${iso}" class="${iso === $("date").value ? "on" : ""} ${iso === today ? "today" : ""}" ${off ? "disabled" : ""}>${d}</button>`;
+  }
+  calendar.innerHTML = html + "</div>";
+}
+calendar.onmousedown = e => e.preventDefault();   // the field keeps the focus
+calendar.onclick = e => {
+  const b = e.target.closest("button");
+  if (!b || b.disabled) return;
+  if (b.dataset.step) { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + +b.dataset.step, 1); drawCalendar(); return; }
+  setDate(b.dataset.iso);
+  closeCalendar();
+};
+$("date-text").onfocus = $("date-text").onclick = () => calendar.hidden && openCalendar();
+$("date-text").onblur = () => closeCalendar();
+
+// the time as HH:MM, 24 h: "9" -> 09:00, "930" -> 09:30, "9.5" -> 09:05; arrows: 5 minutes earlier or later
+function parseTime(text) {
+  const t = text.trim();
+  const m = t.match(/^(\d{1,2})(\d{2})$/) || t.match(/^(\d{1,2})(?:[:.h ](\d{1,2}))?$/);   // 930, 0930; 9, 9:30, 9.5
+  if (!m) return null;
+  const h = +m[1], min = m[2] === undefined ? 0 : +m[2];
+  return h < 24 && min < 60 ? `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}` : null;
+}
+let lastTime = $("time").value;
+$("time").addEventListener("change", () => { $("time").value = parseTime($("time").value) || lastTime; lastTime = $("time").value; }, true);
+$("time").onkeydown = e => {
+  if (e.key === "Enter") { $("time").blur(); return; }
+  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+  e.preventDefault();
+  const [h, m] = (parseTime($("time").value) || lastTime).split(":").map(Number);
+  const t = ((h * 60 + m + (e.key === "ArrowUp" ? 5 : -5)) % 1440 + 1440) % 1440;
+  $("time").value = `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+};
+$("time").onkeyup = e => { if ((e.key === "ArrowUp" || e.key === "ArrowDown") && $("time").value !== lastTime) $("time").dispatchEvent(new Event("change")); };
+// the day chosen, in the title
+function showDay() {
+  $("day").textContent = $("date").value ? new Date($("date").value + "T12:00").toLocaleDateString("en-GB", {weekday: "short", day: "numeric", month: "short", year: "numeric"}) : "";
+}
+
+// ---------------------------------------------------------------- profile: travelcards and zone subscriptions, kept in the browser
+const PROFILE_KEY = "gtfs-router-profile";
+const CARDS = ["halbtax", "ga", "junior_abo", "gleis7_abo"];
+const profile = Object.assign({optimize: "cost", min_change: 0, age: 30, halbtax: false, ga: false, junior_abo: false, gleis7_abo: false, subs: {}}, (() => {
+  try { return JSON.parse(localStorage.getItem(PROFILE_KEY)) || {}; } catch { return {}; }
+})());
+const networkZones = {};   // network -> its zones, from the API
+
+function saveProfile(search = true) {
+  try { localStorage.setItem(PROFILE_KEY, JSON.stringify(profile)); } catch {}
+  const active = CARDS.filter(k => profile[k]).length + Object.keys(profile.subs).length;
+  const badge = document.querySelector("#profile-btn .badge");
+  badge.hidden = !active; badge.textContent = active;
+  clearTimeout(saveProfile.timer);
+  if (search) saveProfile.timer = setTimeout(() => state.from && state.to && searchRoutes(), 300);
+}
+function subscriptionsParam() {
+  return Object.entries(profile.subs).filter(([, z]) => z === "all" || z.length)
+    .map(([n, z]) => `${n}:${z === "all" ? "all" : z.join(",")}`).join(";");
+}
+
+document.querySelectorAll("input[name=optimize]").forEach(r => {
+  r.checked = r.value === profile.optimize;
+  r.onchange = () => { profile.optimize = r.value; saveProfile(); };
+});
+$("min_change").value = profile.min_change;
+$("min_change").oninput = () => { profile.min_change = Math.min(60, Math.max(0, parseInt($("min_change").value) || 0)); saveProfile(); };
+$("age").value = profile.age;
+$("age").oninput = () => { profile.age = Math.max(0, parseInt($("age").value) || 0); saveProfile(); };
+for (const k of CARDS) { $(k).checked = profile[k]; $(k).onchange = () => { profile[k] = $(k).checked; saveProfile(); }; }
+
+const openProfile = () => { $("profile").hidden = false; $("profile-btn").hidden = true; };
+const closeProfile = () => { closeZoneEditor(); $("profile").hidden = true; $("profile-btn").hidden = false; };
+$("profile-btn").onclick = openProfile;
+$("profile-close").onclick = closeProfile;
+
+function renderSubs() {
+  const names = Object.keys(profile.subs).sort();
+  $("subs-list").innerHTML = names.map(n => {
+    const z = profile.subs[n];
+    const what = z === "all" ? "All zones" : z.length ? `${z.length} zone${z.length > 1 ? "s" : ""}: ${z.join(", ")}` : "No zone chosen yet";
+    return `<div class="subscription"><div class="what"><b>${esc(n)}</b><small>${esc(what)}</small></div>
+      <button class="text" data-edit="${esc(n)}">Edit</button><button class="icon-btn" data-remove="${esc(n)}" title="Remove">×</button></div>`;
+  }).join("");
+  $("subs-list").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openZoneEditor(b.dataset.edit));
+  $("subs-list").querySelectorAll("[data-remove]").forEach(b => b.onclick = () => { delete profile.subs[b.dataset.remove]; renderSubs(); saveProfile(); });
+  [...$("sub-network").options].forEach(o => o.disabled = !!o.value && o.value in profile.subs);
+}
+$("sub-network").onchange = () => {
+  const n = $("sub-network").value;
+  $("sub-network").value = "";
+  if (!n) return;
+  profile.subs[n] = profile.subs[n] || [];
+  renderSubs(); saveProfile(); openZoneEditor(n);
+};
+
+// choosing the zones of a subscription, on the map or in the list
+const zoneLayer = L.layerGroup();
+const zoneEditor = {network: null, shapes: {}};
+const isOn = (n, z) => profile.subs[n] === "all" || (profile.subs[n] || []).includes(z);
+
+async function openZoneEditor(n) {
+  if (!networkZones[n]) networkZones[n] = await fetch(`/api/networks/${encodeURIComponent(n)}/zones`).then(r => r.json());
+  zoneEditor.network = n;
+  $("profile-main").hidden = true; $("zone-editor").hidden = false;
+  $("zone-title").textContent = `${n}: ${networkZones[n].length} zones`;
+  $("zone-filter").value = "";
+  zoneLayer.clearLayers(); zoneEditor.shapes = {};
+  const bounds = [];
+  for (const z of networkZones[n]) {
+    const places = z.places.length > 6 ? [...z.places.slice(0, 6), `and ${z.places.length - 6} more`] : z.places;
+    const tip = `<b>Zone ${esc(z.id)} ${esc(z.name)}</b>${z.double ? " (counts as 2)" : ""}<br>${places.map(esc).join("<br>")}`;
+    const ring = z.polygons[0][0];
+    const shape = ring.length >= 3 ? L.polygon(z.polygons, {weight: 1.5}) : L.circle(z.center, {radius: 400, weight: 1.5});
+    shape.bindTooltip(tip, {sticky: true}).on("click", e => { L.DomEvent.stopPropagation(e); toggleZone(z.id); }).addTo(zoneLayer);
+    L.marker(z.center, {interactive: false, icon: L.divIcon({className: "zone-label", html: esc(z.id), iconSize: [40, 16]})}).addTo(zoneLayer);
+    zoneEditor.shapes[z.id] = shape;
+    bounds.push(...z.polygons.flatMap(p => p[0]), z.center);
+  }
+  zoneLayer.addTo(map);
+  if (bounds.length) map.fitBounds(L.latLngBounds(bounds), {paddingTopLeft: [30, 30], paddingBottomRight: [innerWidth > 760 ? 410 : 30, 30]});
+  renderZones();
+}
+function closeZoneEditor() {
+  zoneEditor.network = null;
+  map.removeLayer(zoneLayer);
+  $("zone-editor").hidden = true; $("profile-main").hidden = false;
+  renderSubs();
+}
+function toggleZone(id) {
+  const n = zoneEditor.network;
+  let zones = profile.subs[n] === "all" ? networkZones[n].map(z => z.id) : [...profile.subs[n]];
+  zones = zones.includes(id) ? zones.filter(z => z !== id) : [...zones, id];
+  profile.subs[n] = zones.length === networkZones[n].length ? "all" : zones.sort((a, b) => a.localeCompare(b, undefined, {numeric: true}));
+  renderZones(); saveProfile();
+}
+function renderZones() {
+  const n = zoneEditor.network, zones = networkZones[n], filter = $("zone-filter").value.trim().toLowerCase();
+  const chosen = zones.filter(z => isOn(n, z.id));
+  $("zone-all").checked = profile.subs[n] === "all";
+  $("zone-count").textContent = profile.subs[n] === "all" ? "All zones" : `${chosen.length} zone${chosen.length === 1 ? "" : "s"} chosen`;
+  for (const z of zones) {
+    const on = isOn(n, z.id);
+    zoneEditor.shapes[z.id].setStyle({color: on ? "#1a73e8" : "#37474f", fillColor: on ? "#1a73e8" : "#78909c", fillOpacity: on ? .35 : .12, opacity: on ? .95 : .8, weight: on ? 2 : 1.5});
+  }
+  const shown = zones.filter(z => !filter || z.id.toLowerCase().includes(filter) || [z.name, ...z.places].some(name => name.toLowerCase().includes(filter)));
+  $("zone-list").innerHTML = shown.map(z => `<li><label><input type="checkbox" data-zone="${esc(z.id)}" ${isOn(n, z.id) ? "checked" : ""}>
+    <span class="zid">${esc(z.id)}</span><span><b>${esc(z.name)}</b><small>${esc(z.places.filter(p => p !== z.name).slice(0, 8).join(" · "))}</small><small>${z.stops} stop${z.stops > 1 ? "s" : ""}${z.double ? " · counts as 2 zones" : ""}</small></span></label></li>`).join("");
+  $("zone-list").querySelectorAll("input").forEach(i => i.onchange = () => toggleZone(i.dataset.zone));
+}
+$("zone-filter").oninput = renderZones;
+$("zone-back").onclick = closeZoneEditor;
+$("zone-all").onchange = () => {
+  profile.subs[zoneEditor.network] = $("zone-all").checked ? "all" : [];
+  renderZones(); saveProfile();
+};
+
+fetch("/api/networks").then(r => r.json()).then(list => {
+  $("sub-network").insertAdjacentHTML("beforeend", list.map(n => `<option value="${esc(n.id)}">${esc(n.id)} (${n.zones} zones)</option>`).join(""));
+  renderSubs();
+});
+saveProfile(false);
+document.querySelectorAll(".options input").forEach(i => i.onchange = () => state.from && state.to && searchRoutes());
+
+// ---------------------------------------------------------------- autocomplete: stations of the feed, then addresses (Photon)
+function autocomplete(which) {
+  const input = $(which), list = input.nextElementSibling;
+  let items = [], active = -1, timer = null, seq = 0;
+  const close = () => { list.hidden = true; active = -1; };
+  const render = () => {
+    list.innerHTML = items.map((it, i) =>
+      `<li class="${i === active ? "on" : ""}" data-i="${i}">${it.icon} <span>${esc(it.name)}</span><small>${esc(it.sub || "")}</small></li>`).join("");
+    list.hidden = !items.length;
+  };
+  const choose = i => { const it = items[i]; stop(); close(); if (it) setPlace(which, it); input.blur(); };
+  list.onmousedown = e => { const li = e.target.closest("li"); if (li) { e.preventDefault(); choose(+li.dataset.i); } };
+  input.onblur = () => setTimeout(() => { stop(); close(); }, 100);
+  input.onfocus = () => { if (state[which]) input.select(); };
+  input.onkeydown = e => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      active = (active + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; render(); e.preventDefault();
+    } else if (e.key === "Enter") { choose(active < 0 ? 0 : active); }
+    else if (e.key === "Escape") { stop(); close(); }
+  };
+  // the stations of the router answer in milliseconds: shown first; the addresses of Photon (often seconds) are added
+  // below them when they come, and a search still running is cancelled when the text changes
+  let stationItems = [], addressItems = [], photon = null, addressTimer = null;
+  // a stop chosen, the field left or Escape: the searches still running are cancelled, their answers ignored
+  const stop = () => {
+    clearTimeout(timer); clearTimeout(addressTimer);
+    if (photon) { photon.abort(); photon = null; }
+    seq++;
+  };
+  const show = () => {
+    if (document.activeElement !== input) return;   // never reopen the list of a field that is not being edited
+    const before = items.length;
+    items = [...stationItems, ...addressItems];
+    if (active < 0 || before === 0) active = items.length ? 0 : -1;
+    render();
+  };
+  input.oninput = () => {
+    clearTimeout(timer); clearTimeout(addressTimer);
+    if (photon) { photon.abort(); photon = null; }
+    const q = input.value.trim();
+    const mine = ++seq;
+    if (q.length < 2) { stationItems = addressItems = items = []; render(); return; }
+    timer = setTimeout(async () => {
+      const stations = await fetch(`/api/stations?q=${encodeURIComponent(q)}&limit=6`).then(r => r.json()).catch(() => []);
+      if (mine !== seq) return;
+      stationItems = stations.map(s => ({query: `station:${s.id}`, name: s.name, lat: s.lat, lon: s.lon, icon: "🚏", sub: `${s.departures} dep.`}));
+      addressItems = addressItems.filter(a => a.q === q);
+      show();
+    }, 60);
+    addressTimer = setTimeout(async () => {
+      const c = map.getCenter();
+      photon = new AbortController();
+      const features = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=4&lat=${c.lat}&lon=${c.lng}`, {signal: photon.signal})
+        .then(r => r.json()).then(j => j.features || []).catch(() => null);
+      if (mine !== seq || features === null) return;
+      addressItems = features.filter(f => f.properties.type !== "country").map(f => {
+        const p = f.properties, [lon, lat] = f.geometry.coordinates;
+        const name = [p.name || [p.street, p.housenumber].filter(Boolean).join(" "), p.city && p.city !== p.name ? p.city : null].filter(Boolean).join(", ");
+        return {query: `${lat.toFixed(6)},${lon.toFixed(6)}`, name, lat, lon, icon: "📍", sub: p.country || "", q};
+      });
+      show();
+    }, 350);
+  };
+}
+autocomplete("from");
+autocomplete("to");
+
+// ---------------------------------------------------------------- search and results
+let searchSeq = 0;
+async function searchRoutes() {
+  const mine = ++searchSeq;
+  const params = new URLSearchParams({from: state.from.query, to: state.to.query, time: $("time").value || "08:00", alternatives: 4, age: profile.age, optimize: profile.optimize});
+  if ($("date").value) params.set("date", $("date").value);
+  for (const k of CARDS) if (profile[k]) params.set(k, "true");
+  if (profile.min_change > 0) params.set("min_change", profile.min_change);
+  if (subscriptionsParam()) params.set("subscriptions", subscriptionsParam());
+  if ($("first_class").value) params.set("first_class", "true");
+  const vias = state.vias.filter(v => state[v]);   // the empty fields are left out
+  const stayOf = v => Math.max(0, parseInt($(`${v}-stay`).value) || 0);
+  vias.forEach(v => { params.append("via", state[v].query); params.append("stay", stayOf(v)); });
+  state.params = params;   // for the earlier and later connections
+  $("results").innerHTML = `<div class="msg">Searching…</div>`;
+  try {
+    const r = await fetch(`/api/route?${params}`);
+    const data = await r.json();
+    if (mine !== searchSeq) return;
+    if (!r.ok) throw new Error(data.detail ? JSON.stringify(data.detail) : r.statusText);
+    for (const which of ["from", "to"]) if (state[which].raw) {
+      Object.assign(state[which], {name: data[which].name, lat: data[which].lat, lon: data[which].lon, raw: false});
+      $(which).value = data[which].name;
+    }
+    vias.forEach((v, i) => { if (state[v].raw && data.via[i]) {
+      Object.assign(state[v], {name: data.via[i].name, lat: data.via[i].lat, lon: data.via[i].lon, raw: false});
+      $(v).value = data.via[i].name;
+    } });
+    const shared = new URLSearchParams({from: state.from.query, to: state.to.query, date: data.date, time: params.get("time")});
+    vias.forEach(v => shared.append("via", state[v].query));
+    if (vias.some(stayOf)) vias.forEach(v => shared.append("stay", stayOf(v)));   // one per via, in the same order
+    history.replaceState(null, "", "?" + shared);
+    state.journeys = data.journeys;
+    state.walkMin = data.walk_min;
+    state.selected = -1;   // nothing chosen yet: the list first, a click shows a journey
+    state.expanded = false;
+    renderResults();
+    drawJourney(true);
+  } catch (err) {
+    if (mine === searchSeq) $("results").innerHTML = `<div class="msg">Search failed: ${esc(err.message)}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------- earlier and later connections
+const journeyKey = j => [j.dep_s, j.arr_s, ...j.legs.map(l => l.trip_id || l.kind)].join("|");
+const clock = s => `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}`;
+
+// the same search from another time: later, from a minute after the last journey leaves; earlier, from an hour before
+// the first one (then two, three), keeping the journeys leaving before it
+async function moreConnections(later, button) {
+  const mine = searchSeq, js = state.journeys;
+  if (!js.length || !state.params) return;
+  button.disabled = true; button.textContent = "Searching…";
+  const known = new Set(js.map(journeyKey));
+  const chosen = state.selected >= 0 ? journeyKey(js[state.selected]) : null;
+  let added = [];
+  try {
+    for (let back = 1; back <= (later ? 1 : 3) && !added.length; back++) {
+      const from = later ? js[js.length - 1].dep_s + 60 : Math.max(0, js[0].dep_s - 3600 * back);
+      const params = new URLSearchParams(state.params);
+      params.set("time", clock(from));
+      const r = await fetch(`/api/route?${params}`);
+      const data = await r.json();
+      if (mine !== searchSeq) return;   // another search started meanwhile
+      if (!r.ok) throw new Error(data.detail ? JSON.stringify(data.detail) : r.statusText);
+      added = data.journeys.filter(j => !known.has(journeyKey(j)) && (later || j.dep_s < js[0].dep_s));
+      if (!later && from === 0) break;
+    }
+  } catch (err) {
+    button.disabled = false; button.textContent = `Search failed: ${err.message}`;
+    return;
+  }
+  state.journeys = [...js, ...added].sort((a, b) => a.dep_s - b.dep_s || a.arr_s - b.arr_s);
+  state.selected = chosen ? state.journeys.findIndex(j => journeyKey(j) === chosen) : -1;
+  renderResults();
+  if (!added.length) {   // nothing more on that side: said on the button
+    const b = $("results").querySelector(later ? "button.more.later" : "button.more.earlier");
+    if (b) { b.disabled = true; b.textContent = later ? "No later connection" : "No earlier connection"; }
+  }
+}
+
+// ---------------------------------------------------------------- crowding of the simulation
+const CROWD_LABELS = ["", "Low occupancy", "Some crowding", "Crowded"];
+const person = on => `<svg viewBox="0 0 10 14"><circle cx="5" cy="3" r="2.4" class="${on ? "on" : "off"}"/><path d="M1.2 13.4V9.2a3.8 3.8 0 0 1 7.6 0v4.2z" class="${on ? "on" : "off"}"/></svg>`;
+const crowdTip = c => `${CROWD_LABELS[c.level]} when you board (simulated)`;
+const crowd = c => c ? `<span class="crowd l${c.level}" title="${esc(crowdTip(c))}">${[1, 2, 3].map(k => person(k <= c.level)).join("")}</span>` : "";
+const crowdDot = seg => seg ? `<span class="cdot l${seg.level}" title="${esc(CROWD_LABELS[seg.level])}"></span>` : `<span class="cdot"></span>`;
+
+function chips(j) {
+  const parts = [];
+  j.legs.forEach((l, i) => {
+    if (l.kind === "stay") parts.push(`<span class="chip walk" title="Stay in ${esc(l.from.name)}">⏸ ${fmtDur(l.duration_min)}</span>`);
+    else if (l.kind === "walk") { if (l.duration_min >= 1 || j.legs.length === 1) parts.push(`<span class="chip walk">🚶${j.legs.length === 1 ? " " + fmtDur(l.duration_min) : l.duration_min}</span>`); }
+    else { const [c, ic] = mode(l.mode); parts.push(`<span class="chip" style="background:${c}">${ic} ${esc(l.line)}</span>${crowd(boardingCrowd(l))}`); }
+  });
+  return parts.join(`<span class="sep">›</span>`);
+}
+
+function renderResults() {
+  const js = state.journeys;
+  if (!js.length) { $("results").innerHTML = `<div class="msg">No connection found after ${esc($("time").value)} on ${esc($("day").textContent)}.</div>`; return; }
+  let html = js.map((j, i) => `
+    <div class="card ${i === state.selected ? "on" : ""}" data-i="${i}">
+      <div class="top"><span class="times">${j.dep} – ${j.arr}</span><span class="dur">${fmtDur(j.duration_min)}</span></div>
+      <div class="chips">${chips(j)}</div>
+      <div class="sub">
+        <span>${j.legs.some(l => l.kind === "ride") ? (j.changes ? `${j.changes} change${j.changes > 1 ? "s" : ""}` : "Direct") : "On foot"}</span>
+        ${firstRide(j) ? `<span>from ${esc(firstRide(j).from.name)} at ${firstRide(j).dep}</span>` : ""}
+        ${j.price ? `<span class="price">${j.price.chf ? `CHF ${j.price.chf.toFixed(2)}` : "Free"}</span>` : ""}
+      </div>
+      ${i === state.selected && state.expanded ? timeline(j) : ""}
+    </div>`).join("");
+  html = `<button class="more earlier">↑ Earlier connections</button>${html}<button class="more later">↓ Later connections</button>`;
+  if (state.walkMin != null && js.every(j => j.legs.length > 1) && state.walkMin <= 90)
+    html += `<div class="msg">🚶 Walking all the way: about ${fmtDur(state.walkMin)} (beeline)</div>`;
+  $("results").innerHTML = html;
+  $("results").querySelector("button.more.earlier").onclick = e => moreConnections(false, e.currentTarget);
+  $("results").querySelector("button.more.later").onclick = e => moreConnections(true, e.currentTarget);
+  $("results").querySelectorAll(".card").forEach(card => card.onclick = e => {
+    if (e.target.closest(".timeline")) return;
+    const i = +card.dataset.i;
+    if (i === state.selected) { state.expanded = !state.expanded; renderResults(); return; }   // the details open or closed
+    state.selected = i; state.expanded = true; renderResults(); drawJourney(true);
+  });
+  $("results").querySelectorAll("button.link").forEach(b => b.onclick = () => {
+    const ul = b.nextElementSibling; ul.hidden = !ul.hidden;
+    b.textContent = (ul.hidden ? "▸ " : "▾ ") + b.dataset.label;
+  });
+}
+const firstRide = j => j.legs.find(l => l.kind === "ride");
+
+// one row per stop where a vehicle is boarded or left, with the line drawn above and below its dot: a ride in its
+// color, a walk dotted, a wait plain; between two vehicles, one row for the change (walks, stays, waiting)
+const seg = (part, style) => !style ? "" : style === "walk" || style === "wait"
+  ? `<span class="seg ${part} ${style}"></span>` : `<span class="seg ${part} ride" style="--sc:${style}"></span>`;
+const stopRow = (time, name, above, below, {timeClass = "", color = "", info = ""} = {}) =>
+  `<div class="tl" style="--c:${color || "var(--muted)"}"><div class="t ${timeClass}">${time}</div>
+   <div class="bar">${seg("top", above)}${seg("bottom", below)}<div class="node"></div></div>
+   <div class="what"><div class="name">${esc(name)}</div>${info}</div></div>`;
+const lineRow = (style, content, cls = "") =>
+  `<div class="tl"><div></div><div class="bar">${seg("full", style)}</div><div class="what ${cls}">${content}</div></div>`;
+
+function rideContent(l) {
+  const c = mode(l.mode)[0], [, ic] = mode(l.mode), inter = l.stops.slice(1, -1);
+  return `<span class="chip" style="background:${c}">${ic} ${esc(l.line)}</span> <span class="info">${esc(l.agency)}</span>
+    <div class="info">${fmtDur(l.duration_min)} · ${l.stops.length - 1} stop${l.stops.length > 2 ? "s" : ""}</div>
+    ${boardingCrowd(l) ? `<div class="info">${crowd(boardingCrowd(l))} ${boardingText(l, boardingCrowd(l))}</div>` : ""}
+    ${l.profile ? profileContent(l.profile, l.mode) : ""}
+    ${inter.length ? `<button class="link" data-label="${inter.length} intermediate stop${inter.length > 1 ? "s" : ""}">▸ ${inter.length} intermediate stop${inter.length > 1 ? "s" : ""}</button>
+      <ul class="stops" hidden>${inter.map((st, i) => `<li>${l.crowding ? crowdDot(l.crowding.segments[i + 1]) : ""}${st.dep} ${esc(st.name)}</li>`).join("")}</ul>` : ""}`;
+}
+
+// the crowding where the traveller boards (looking for a seat): the first section of the ride, else the first one known
+function boardingCrowd(l) {
+  const segs = l.crowding ? l.crowding.segments : [], i = segs.findIndex(Boolean);
+  return i < 0 ? null : {...segs[i], at: i};
+}
+const boardingText = (l, b) => `${CROWD_LABELS[b.level]} ${b.at === 0 ? "when you board" : "further on"}`;
+
+// who travels on a ride (simulated): per dimension, the share of each category and, as a tick, that of all public transport
+// in the same period
+const pct = x => `${Math.round(x * 100)} %`;
+const VEHICLE = {rail: "train", bus: "bus", tram: "tram", metro: "metro", boat: "boat", "cable car": "cable car", funicular: "funicular"};
+function profileContent(p, mode) {
+  const vehicle = `this ${VEHICLE[mode] || "vehicle"}`, scope = p.scope === "ride" ? vehicle : "this line";
+  const when = p.all_day ? "all day" : p.period.toLowerCase();
+  const why = [p.scope === "line" ? `too few on ${vehicle}` : "", p.all_day ? `too few in the ${p.period.toLowerCase()}` : ""].filter(Boolean).join(", ");
+  const note = `${p.all_day ? "All day" : esc(p.period)} · ${p.people} simulated travellers on ${p.scope === "ride" ? vehicle : "the whole line"}${why ? ` (${why})` : ""}`;
+  const label = `Profile of travellers on ${vehicle}`;
+  return `<button class="link" data-label="${label}">▸ ${label}</button>
+    <div class="profile" hidden>
+      <div class="pnote">${note}</div>
+      <div class="pkey"><span><i class="kfill"></i>${scope}</span><span><i class="ktick"></i>all public transport, ${when}</span></div>
+      ${p.dimensions.map(d => `<div class="pdim"><div class="pname">${esc(d.name)}</div>${d.items.map(it => `
+        <div class="prow" title="${esc(`${it.label}: ${pct(it.share)} on ${scope}, ${pct(it.average)} on all public transport (${when})`)}">
+          <span class="plab">${esc(it.label)}</span>
+          <span class="ptrack"><span class="pfill" style="width:${(it.share * 100).toFixed(1)}%"></span><span class="ptick" style="left:${(it.average * 100).toFixed(1)}%"></span></span>
+          <span class="pval">${pct(it.share)}</span></div>`).join("")}</div>`).join("")}
+    </div>`;
+}
+
+// what happens between two stop rows: walks, stays and the waiting left (minutes)
+function connection(parts, fromTime, toTime) {
+  const items = [];
+  let used = 0;
+  for (const l of parts) {
+    used += l.arr_s - l.dep_s;
+    if (l.kind === "stay") items.push(`⏸ Stay ${fmtDur(l.duration_min)} in ${esc(l.from.name)}`);
+    else if (l.arr_s > l.dep_s) items.push(`🚶 Walk ${l.duration_min ? fmtDur(l.duration_min) : "< 1 min"}`);
+  }
+  const wait = Math.round((toTime - fromTime - used) / 60);
+  if (!items.length && wait > 0) items.push(`⇄ Change · ${fmtDur(wait)}`);
+  else if (wait > 0) items.push(`${fmtDur(wait)} to wait`);
+  return {text: items.join(" · "), walk: parts.some(l => l.kind === "walk" && l.arr_s > l.dep_s)};
+}
+
+function timeline(j) {
+  const legs = j.legs, rides = legs.map((l, i) => i).filter(i => legs[i].kind === "ride");
+  let html = `<div class="timeline">`;
+  if (!rides.length) {   // on foot all the way
+    const l = legs[0];
+    html += stopRow(l.dep, l.from.name, null, "walk") + lineRow("walk", `🚶 Walk ${fmtDur(l.duration_min)}`, "conn")
+      + stopRow(legs[legs.length - 1].arr, legs[legs.length - 1].to.name, "walk", null, {timeClass: "end"});
+    return html + `</div>`;
+  }
+  let previous = null;   // the last ride drawn
+  rides.forEach((i, k) => {
+    const l = legs[i], c = mode(l.mode)[0];
+    const before = legs.slice(previous === null ? 0 : rides[k - 1] + 1, i);   // the walks and stays before the ride
+    if (previous === null && before.length) {   // from the origin, on foot
+      const conn = connection(before, before[0].dep_s, l.dep_s);
+      html += stopRow(before[0].dep, before[0].from.name, null, conn.walk ? "walk" : "wait")
+        + lineRow(conn.walk ? "walk" : "wait", `<span class="info">${conn.text}</span>`, "conn");
+    } else if (previous !== null) {
+      const conn = connection(before, previous.arr_s, l.dep_s);
+      if (conn.text) html += lineRow(conn.walk ? "walk" : "wait", `<span class="info">${conn.text}</span>`, "conn");
+    }
+    const startStyle = previous === null ? (before.length ? (connection(before, before[0].dep_s, l.dep_s).walk ? "walk" : "wait") : null)
+      : (connection(before, previous.arr_s, l.dep_s).walk ? "walk" : "wait");
+    html += stopRow(l.dep, l.from.name, startStyle, c, {timeClass: "dep", color: c});
+    html += lineRow(c, rideContent(l));
+    const after = legs.slice(i + 1, rides[k + 1] === undefined ? legs.length : rides[k + 1]);
+    const last = rides[k + 1] === undefined;
+    const afterStyle = !last ? (connection(after, l.arr_s, legs[rides[k + 1]].dep_s).walk ? "walk" : "wait")
+      : (after.some(a => a.kind === "walk" && a.arr_s > a.dep_s) ? "walk" : null);
+    html += stopRow(l.arr, l.to.name, c, afterStyle, {timeClass: last && !afterStyle ? "end" : "", color: c});
+    if (last && after.length && afterStyle) {   // to the destination, on foot
+      const conn = connection(after, l.arr_s, after[after.length - 1].arr_s);
+      html += lineRow("walk", `<span class="info">${conn.text}</span>`, "conn")
+        + stopRow(after[after.length - 1].arr, after[after.length - 1].to.name, "walk", null, {timeClass: "end"});
+    }
+    previous = l;
+  });
+  html += `</div>`;
+  if (j.price) html += `<div class="pricebox">CHF ${j.price.chf.toFixed(2)} · ${esc(j.price.rule)} · ${j.price.network_km} km</div>`;
+  return html;
+}
+
+function drawJourney(fit) {
+  routeLayer.clearLayers();
+  const j = state.journeys[state.selected];
+  if (!j) {   // no journey chosen: the places of the search in view
+    const places = ["from", ...state.vias, "to"].map(w => state[w]).filter(p => p && !p.raw);
+    if (fit && places.length) map.fitBounds(L.latLngBounds(places.map(p => [p.lat, p.lon])), {padding: [60, 60], maxZoom: 15});
+    return;
+  }
+  const all = [];
+  for (const l of j.legs) {
+    all.push(...l.path);
+    if (l.kind === "stay") continue;
+    if (l.kind === "walk") {
+      L.polyline(l.path, {color: "#5f6368", weight: 4, dashArray: "1 8", lineCap: "round"}).addTo(routeLayer);
+      continue;
+    }
+    const [c] = mode(l.mode);
+    L.polyline(l.path, {color: "#fff", weight: 9, opacity: .9}).addTo(routeLayer);
+    L.polyline(l.path, {color: c, weight: 5}).addTo(routeLayer);
+    l.stops.forEach((s, k) => {
+      const end = k === 0 || k === l.stops.length - 1;
+      L.circleMarker([s.lat, s.lon], {radius: end ? 6 : 3, color: c, weight: end ? 3 : 2, fillColor: "#fff", fillOpacity: 1})
+        .bindTooltip(`${esc(s.name)}<br>${k === 0 ? s.dep : s.arr}`, {direction: "top"}).addTo(routeLayer);
+    });
+  }
+  if (fit && all.length) map.fitBounds(L.latLngBounds(all), {padding: [40, 40]});
+}
+
+// ---------------------------------------------------------------- start
+fetch("/api/info").then(r => r.json()).then(info => {
+  // a shared search: ?from=<lat,lon or station:id>&to=...&date=YYYY-MM-DD&time=HH:MM[&via=...][&stay=<minutes, one per via>]
+  const url = new URLSearchParams(location.search);
+  Object.assign($("date"), {min: info.first_date, max: info.last_date});
+  $("date-text").title = `Timetable from ${euroDate(info.first_date)} to ${euroDate(info.last_date)}`;
+  const asked = url.get("date");
+  setDate(asked && asked >= info.first_date && asked <= info.last_date ? asked : info.date, {search: false});
+  if (url.get("time") && parseTime(url.get("time"))) $("time").value = lastTime = parseTime(url.get("time"));
+  const fromUrl = q => {
+    if (!q) return null;
+    const ll = q.split(",").map(Number);
+    return ll.length === 2 && ll.every(isFinite) ? pointPlace(ll[0], ll[1]) : {query: q, name: "…", lat: 0, lon: 0, raw: true};
+  };
+  if (url.get("from") && url.get("to")) {
+    state.from = fromUrl(url.get("from")); state.to = fromUrl(url.get("to"));
+    const stays = url.getAll("stay");
+    url.getAll("via").forEach((q, i) => addVia(fromUrl(q), {focus: false, stay: parseInt(stays[i]) || 0}));
+    searchRoutes().then(() => ["from", ...state.vias, "to"].forEach(w => state[w] && setPlace(w, state[w], {search: false})));
+  } else map.fitBounds(info.bounds);
+});
+</script>
+</body>
+</html>
