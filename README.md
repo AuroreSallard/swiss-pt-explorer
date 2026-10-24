@@ -43,7 +43,9 @@ Then tell the tool where your files are. The settings are in two files next to `
   ```
 
 Relative paths are relative to the folder of the config files, and `~` is your home folder. Both the crowding and the
-passenger profiles come from the `crowding` folder; without it, the app runs without them.
+passenger profiles come from the `crowding` folder (or from the `crowding_cache` file, see
+[Running without the simulation](#running-without-the-simulation)); without them, the app runs without crowding and
+profiles.
 
 Start the server:
 
@@ -55,7 +57,7 @@ and open http://localhost:8000.
 
 Every setting can also be given on the command line, where it wins over the config files: `--gtfs`, `--crowding`,
 `--crowding-sample`, `--date` (the date the page shows first; by default today if the timetable covers it, else its
-first day), `--port`... `--crowding ""` turns off the crowding and profiles. `python api.py --help` lists them all.
+first day), `--port`... `--crowding "" --crowding-cache ""` turns off the crowding and profiles. `python api.py --help` lists them all.
 
 The first start takes a while: reading the whole Swiss timetable takes about 30 s and 1.7 GB of memory (1.1 million
 trips in 2026), and building the passenger profiles about 30 s and 2 GB for Switzerland at 5 %. Everything is then
@@ -303,6 +305,20 @@ for example a simulation of Lausanne at 10 %:
 ```bash
 python api.py --crowding path/to/lausanne_10pct/simulation_output --crowding-sample 0.1
 ```
+
+#### Running without the simulation
+
+The MATSim output files are large, and a server may not have them. Set `crowding_cache` to a file, for example
+`crowding_cache: cache/simulation.pkl` in `config_local.yml`:
+
+- on a computer with the simulation, each start saves the crowding and the profiles in that one file (about 130 MB for
+  Switzerland at 5 %), and saves it again only when the simulation, its sample rate or the way they are computed
+  changes;
+- on a computer without the simulation (no `crowding` folder, or one without its files), they are read from that file.
+  The server says at start which simulation the file comes from and when it was saved.
+
+So to put the app on a server, start it once where the simulation is, then copy that file along with the rest. Keep in
+mind that a copied file is never updated: after a new simulation, copy it again.
 
 ### Who the other passengers are
 

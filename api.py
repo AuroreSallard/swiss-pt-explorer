@@ -33,7 +33,7 @@ from fastapi.staticfiles import StaticFiles
 
 from gtfs_router import EARLIEST_ARRIVAL, SWISS_COST, Journey, Leg, Router
 from gtfs_router.feed import day_of
-from gtfs_router.load import add_arguments, default_date, load, load_crowding, load_profiles
+from gtfs_router.load import add_arguments, default_date, load, load_simulation
 from gtfs_router.pricing import Traveller, parse_subscriptions
 from scipy.spatial import ConvexHull
 
@@ -156,7 +156,7 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
     """The FastAPI application: the API and the page.
 
     net: the Network of the whole feed (the journeys of a date are routed on net.on(date)). pricing, tracks, crowding,
-    profiles: what load() and the load_* functions return (each can be None: the API then goes without it).
+    profiles: what load() and load_simulation() return (each can be None: the API then goes without it).
     alternatives_max: the most journeys a search returns. optimize_default: "cost" or "time" when a search does not
     say. date: the date shown first (else today if the timetable has it, else its first day)."""
     app = FastAPI(title = "GTFS router", description = "Public transport journeys and their prices")
@@ -477,8 +477,9 @@ def main():
     logging.basicConfig(level = logging.INFO, format = "%(message)s")
 
     import uvicorn
-    app = create_app(*load(args), optimize_default = "cost" if args.routing == "cost" else "time", crowding = load_crowding(args), date = args.date,
-                     profiles = load_profiles(args))
+    crowding, profiles = load_simulation(args)
+    app = create_app(*load(args), optimize_default = "cost" if args.routing == "cost" else "time", crowding = crowding, date = args.date,
+                     profiles = profiles)
     uvicorn.run(app, host = args.host, port = args.port)
 
 

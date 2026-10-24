@@ -18,6 +18,8 @@ network_data: data/network   # the rail lines, bus routes and fare network map (
 routing: cost                # cost (least generalized cost) or earliest (earliest arrival)
 crowding:                    # the output folder of a MATSim simulation: crowding and profiles of travellers (empty: none)
 crowding_sample: 0.05        # the share of the population that simulation simulated (0.05: 5 %)
+crowding_cache:              # a .pkl file with the crowding and profiles: written when the simulation is there, read when
+                             # it is not, so a server can run with this file instead of the simulation (e.g. cache/simulation.pkl)
 cache: cache                 # where the network, tracks, crowding and profiles are kept after the first start
 host: 127.0.0.1              # api.py: the address and port of the server
 port: 8000
