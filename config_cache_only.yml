@@ -1,0 +1,15 @@
+# Settings to run with the cached files only, without the timetable, the network data and the simulation: on a server,
+# copy this file as config_local.yml, next to config.yml, with these files:
+#
+#   cache/network.pkl        the network of the timetable and the tracks (written by network_cache on a computer with the
+#                            timetable, the network data and the pricing inputs)
+#   cache/simulation.pkl     the crowding and the profiles (written by crowding_cache on a computer with the simulation)
+#   data/pricing/            the fare inputs (in git), read at each start
+#
+# The files are never updated here: after a new timetable or simulation, copy them again.
+
+gtfs:                                # no timetable: the network comes from network_cache
+network_data:                        # no rail lines nor municipalities: the tracks come from network_cache
+crowding:                            # no simulation: the crowding and profiles come from crowding_cache
+network_cache: cache/network.pkl
+crowding_cache: cache/simulation.pkl

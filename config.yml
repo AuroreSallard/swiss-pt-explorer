@@ -20,6 +20,9 @@ crowding:                    # the output folder of a MATSim simulation: crowdin
 crowding_sample: 0.05        # the share of the population that simulation simulated (0.05: 5 %)
 crowding_cache:              # a .pkl file with the crowding and profiles: written when the simulation is there, read when
                              # it is not, so a server can run with this file instead of the simulation (e.g. cache/simulation.pkl)
+network_cache:               # a .pkl file with the network and the tracks: written when the timetable (gtfs) is there, read
+                             # when it is not, so a server can run with this file instead of the timetable and network_data
+                             # (e.g. cache/network.pkl)
 cache: cache                 # where the network, tracks, crowding and profiles are kept after the first start
 host: 127.0.0.1              # api.py: the address and port of the server
 port: 8000

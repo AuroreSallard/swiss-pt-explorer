@@ -3,7 +3,8 @@
 The settings come from config.yml (in git, the shared defaults) and config_local.yml (not in git, the settings of one
 computer, whose keys replace those of config.yml). An option given on the command line wins over both. load() then
 builds what the options point to: the network of the timetable, the prices and the tracks, each from the cache folder
-when it was built before; load_simulation does the same for the crowding and the profiles.
+when it was built before (or from the network_cache file, without the timetable); load_simulation does the same for the
+crowding and the profiles.
 """
 import datetime
 import json
@@ -14,7 +15,7 @@ import pickle
 import pandas as pd
 import yaml
 
-from . import crowding as crowding_module, profiles as profiles_module
+from . import crowding as crowding_module, feed as feed_module, profiles as profiles_module, tracks as tracks_module
 from .crowding import build_crowding
 from .profiles import build_profiles
 from .csa import EARLIEST_ARRIVAL, SWISS_COST
@@ -24,7 +25,7 @@ from .tracks import build_tracks
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILES = ("config.yml", "config_local.yml")   # in this order: the keys of config_local.yml (not in git) replace the others
-PATHS = ("gtfs", "pricing", "network_data", "fares", "crowding", "crowding_cache", "cache")   # the settings that are paths
+PATHS = ("gtfs", "pricing", "network_data", "fares", "crowding", "crowding_cache", "network_cache", "cache")   # the settings that are paths
 # the files of the network data folder: the municipalities and their fare networks, the SBB rail lines, and the MATSim
 # schedule and network (for the bus routes)
 NETWORK_FILES = {"municipalities": "tarifverbundkarte.geojson", "lines": "linie-mit-polygon.geojson",
@@ -53,8 +54,9 @@ def add_arguments(parser):
     """Adds the options shared by api.py and route_trips.py to an argparse parser, with the values of the config files
     as defaults, and returns the config (for the options of each script, such as the port of api.py)."""
     config = read_config()
-    parser.add_argument("--gtfs", required = not config.get("gtfs"), default = config.get("gtfs"),
-                        help = "GTFS feed: zip or folder of .txt files (default: gtfs in the config)")
+    parser.add_argument("--gtfs", required = not config.get("gtfs") and not config.get("network_cache"), default = config.get("gtfs"),
+                        help = "GTFS feed: zip or folder of .txt files (default: gtfs in the config; not needed when the "
+                               "--network-cache file is there)")
     parser.add_argument("--date", default = config.get("date"), help = "YYYYMMDD, a date of the feed: the date of the journeys (default: today, "
                                                                      "else the first date of the feed)")
     parser.add_argument("--pricing", default = config.get("pricing"), help = "Folder with the pricing inputs; empty: no prices")
@@ -75,6 +77,9 @@ def add_arguments(parser):
     parser.add_argument("--crowding-cache", default = config.get("crowding_cache"),
                         help = "A .pkl file with the crowding and the profiles of the simulation: written when the simulation of "
                                "--crowding is there, read when it is not (a server can run with this file only); empty: none")
+    parser.add_argument("--network-cache", default = config.get("network_cache"),
+                        help = "A .pkl file with the network of the timetable and the tracks: written when the GTFS feed of --gtfs "
+                               "is there, read when it is not (a server can run with this file only); empty: none")
     parser.add_argument("--cache", default = config.get("cache") or os.path.join(ROOT, "cache"), help = "Where the network and the tracks are kept")
     return config
 
@@ -120,20 +125,26 @@ def _save_simulation(path, folder, sample, crowding, profiles):
     files = [os.path.join(folder, f) for f in dict.fromkeys(crowding_module.FILES + profiles_module.FILES)]
     stamp = (f"{crowding_module.VERSION}|{profiles_module.VERSION}|{sample}|"
              + "|".join(f"{os.path.abspath(p)}:{os.path.getmtime(p)}" for p in files if os.path.exists(p)))
+    _save_pickle(path, {"source": folder, "sample": sample, "stamp": stamp}, (crowding, profiles), "Crowding and profiles")
+
+
+def _save_pickle(path, about, data, what):
+    """Saves data in a file of two pickles: first the dict about (with "stamp", and "saved": today), then data; unless
+    the file already holds the same stamp, read without loading the data. what: the name of the data, for the log."""
     if os.path.exists(path):
         try:
             with open(path, "rb") as f:
-                if pickle.load(f).get("stamp") == stamp:
+                if pickle.load(f).get("stamp") == about["stamp"]:
                     return
         except Exception:   # an unreadable file: written again
             pass
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok = True)
-    about = {"source": folder, "sample": sample, "saved": datetime.date.today().isoformat(), "stamp": stamp}
+    about = about | {"saved": datetime.date.today().isoformat()}
     with open(path + ".tmp", "wb") as f:   # written aside, then put in place: a server reading it never sees half a file
         pickle.dump(about, f, protocol = pickle.HIGHEST_PROTOCOL)
-        pickle.dump((crowding, profiles), f, protocol = pickle.HIGHEST_PROTOCOL)
+        pickle.dump(data, f, protocol = pickle.HIGHEST_PROTOCOL)
     os.replace(path + ".tmp", path)
-    logger.info(f"Crowding and profiles saved in {path} ({os.path.getsize(path) / 1e6:.0f} MB)")
+    logger.info(f"{what} saved in {path} ({os.path.getsize(path) / 1e6:.0f} MB)")
 
 
 def load_crowding(args):
@@ -160,18 +171,42 @@ def load(args):
 
     There are no prices without --pricing, and no tracks without the rail lines and the municipalities in
     --network-data. With --fares, the changes of that file are applied to the prices. The network of a date is
-    network.on(date)."""
-    files = {k: os.path.join(args.network_data, f) for k, f in NETWORK_FILES.items()} if args.network_data else {}
-    files = {k: f for k, f in files.items() if os.path.exists(f)}
-    net = build_network(args.gtfs, cache_dir = args.cache)
+    network.on(date).
+
+    With --network-cache, the network and the tracks are saved in that file when the GTFS feed is there, and read from
+    it when it is not: a server then needs neither the feed nor --network-data, only that file and --pricing."""
+    if args.gtfs and os.path.exists(args.gtfs):
+        net, tracks = _build_network_and_tracks(args)
+    elif args.network_cache and os.path.exists(args.network_cache):
+        with open(args.network_cache, "rb") as f:
+            about = pickle.load(f)   # what the file holds, written before the data (see _build_network_and_tracks)
+            net, tracks = pickle.load(f)
+        logger.info(f"Network and tracks from {args.network_cache}: the timetable {about['source']}, saved on {about['saved']}"
+                    f"{'' if tracks is not None else ', without tracks'}")
+    else:
+        raise FileNotFoundError(f"No GTFS feed {args.gtfs}" + (f", and no file {args.network_cache}" if args.network_cache else ""))
     if not args.pricing:
         return net, None, None
-    tracks = None
-    if "lines" in files and "municipalities" in files:
-        tracks = build_tracks(net, Pricing(args.pricing), files["lines"], files["municipalities"], files.get("schedule"), files.get("matsim_network"),
-                              cache_dir = args.cache)
     pricing = Pricing(args.pricing, tracks = tracks)
     if args.fares:
         with open(args.fares) as f:
             pricing = pricing.with_changes(json.load(f))
     return net, pricing, tracks
+
+
+def _build_network_and_tracks(args):
+    """(the Network of the GTFS feed, the Tracks or None), built from the files (or the cache folder), and saved in the
+    --network-cache file, if any, with a stamp of the files and of the versions of the code."""
+    files = {k: os.path.join(args.network_data, f) for k, f in NETWORK_FILES.items()} if args.network_data else {}
+    files = {k: f for k, f in files.items() if os.path.exists(f)}
+    net = build_network(args.gtfs, cache_dir = args.cache)
+    tracks = None
+    if args.pricing and "lines" in files and "municipalities" in files:
+        tracks = build_tracks(net, Pricing(args.pricing), files["lines"], files["municipalities"], files.get("schedule"), files.get("matsim_network"),
+                              cache_dir = args.cache)
+    if args.network_cache:
+        inputs = [args.gtfs] + sorted(files.values()) + ([os.path.join(args.pricing, f) for f in sorted(os.listdir(args.pricing))] if tracks else [])
+        stamp = (f"{feed_module.VERSION}|{tracks_module.VERSION}|"
+                 + "|".join(f"{os.path.abspath(p)}:{os.path.getmtime(p)}" for p in inputs))
+        _save_pickle(args.network_cache, {"source": args.gtfs, "stamp": stamp}, (net, tracks), "Network and tracks")
+    return net, tracks

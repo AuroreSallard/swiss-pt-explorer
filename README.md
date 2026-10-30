@@ -320,6 +320,15 @@ The MATSim output files are large, and a server may not have them. Set `crowding
 So to put the app on a server, start it once where the simulation is, then copy that file along with the rest. Keep in
 mind that a copied file is never updated: after a new simulation, copy it again.
 
+#### Running without the timetable
+
+The same goes for the timetable and the network data, with `network_cache` (e.g. `cache/network.pkl`, about 690 MB for
+Switzerland): where the GTFS feed is, each start saves the network and the tracks in that file (again only when the
+feed, the network data, the pricing inputs or the code change); where it is not, they are read from it.
+
+`config_cache_only.yml` has the settings of a server with only these two files and `data/pricing`: copy it there as
+`config_local.yml`, with `cache/network.pkl` and `cache/simulation.pkl`.
+
 ### Who the other passengers are
 
 When the simulation folder also has `output_legs.csv.gz`, `output_trips.csv.gz` and `output_persons.csv.gz`, the server
