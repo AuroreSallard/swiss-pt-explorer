@@ -104,6 +104,10 @@ def load_simulation(args, with_profiles = True):
     if folder:
         raise FileNotFoundError(f"No simulation in {folder} (it needs {', '.join(crowding_module.FILES)})"
                                 + (f", and no file {saved_path}" if saved_path else ""))
+    if saved_path:
+        logger.warning(f"No crowding and no profiles: the crowding_cache file {saved_path} does not exist, and there is no simulation")
+    else:
+        logger.info("No crowding and no profiles: neither crowding nor crowding_cache is set")
     return None, None
 
 

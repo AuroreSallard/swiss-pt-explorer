@@ -4,10 +4,10 @@ A Swiss journey can mix SBB trains, priced by distance, the zones of regional fa
 and rides in no network. There is no single price list, so the ticket is rebuilt in four steps (Pricing.price):
 
 1. Which fare networks each ride belongs to: those shared by all its stops (gtfs_zones.csv, plus "SBB" for the
-   stations of SBB_all_distances.csv), keeping only the highest priority (regional networks 2, Z-Pass 1, SBB 0). With
-   the tracks, its zones are those its track crosses (track_zones).
-2. Which network prices which rides: a network covering all the rides prices the whole journey; otherwise each ride
-   goes to a network it shares with another ride, or else to its own (group_rides).
+   stations of SBB_all_distances.csv). With the tracks, its zones are those its track crosses (track_zones).
+2. Which network prices which rides: a network covering all the rides prices the whole journey (the one of the highest
+   priority: regional networks 2, Z-Pass 1, SBB 0); otherwise each ride goes to a network of its highest priority it
+   shares with another ride, or else to its own (group_rides).
 3. The price in that network: by number of zones, by SBB tariff kilometres, or by distance for the rides in no network
    (the calculators: zone_price, sbb_price, default_price).
 4. Free travel (GA, under 6, Junior card, Gleis 7, regional and zone subscriptions), half fare, 1st class, and the
@@ -244,17 +244,14 @@ class Pricing:
         return self.zones_by_stop.get(stop_id, set()) | self.zones_by_stop.get(_simplified(stop_id), set())
 
     def ride_zones(self, stop_ids):
-        """The zones of a ride from its stops (cleanZoneInfo in Java): {authority id: [zones]} for the networks shared by
-        every stop of the ride, keeping only those of the highest priority. A zone listed in several networks of a stop
-        counts once, for the network of the highest priority."""
+        """The zones of a ride from its stops (cleanZoneInfo in Java): {authority id: [zones]} for every network shared
+        by all the stops of the ride, whatever its priority: group_rides chooses between them, once it knows the other
+        rides. A Z-Pass reuses the zone numbers of the networks it joins (Zürich HB: ZVV 110 and ZPassAwelle 110), so the
+        zones are kept per network."""
         by_stop = {}
         for stop in dict.fromkeys(stop_ids):
-            unique = {}
-            for auth, zone in self._stop_zones(stop):   # deduplicated by zone id, the highest priority kept
-                if zone not in unique or auth.priority > unique[zone][0].priority:
-                    unique[zone] = (auth, zone)
             groups = {}
-            for auth, zone in unique.values():
+            for auth, zone in sorted(self._stop_zones(stop), key = lambda p: (p[0].id, len(p[1]), p[1])):
                 groups.setdefault(auth, []).append(zone)
             by_stop[stop] = groups
 
@@ -263,12 +260,10 @@ class Pricing:
             common = set(groups) if common is None else common & set(groups)
         if not common:
             return {}
-        top = max(a.priority for a in common)
-        selected = {a for a in common if a.priority == top}
 
         result = {}
         for groups in by_stop.values():
-            for auth in selected:
+            for auth in sorted(common, key = lambda a: a.id):
                 for zone in groups.get(auth, []):
                     if zone not in result.setdefault(auth.id, []):
                         result[auth.id].append(zone)
@@ -401,16 +396,19 @@ class Pricing:
         """Which network prices which rides (getPricingStrategy in Java): {authority id: [rides]}, one ticket each.
 
         If one network covers all the rides, it prices the whole journey (the one of the highest priority if there are
-        several). Otherwise each ride goes to a network it shares with another ride (the one of the lowest priority, as
-        in Java), or else to its own (the one of the highest priority)."""
+        several: an S-Bahn Zürich HB - Altstetten and a train Altstetten - Baden are in ZVV, ZPassAwelle and SBB for the
+        first, ZPassAwelle and SBB for the second, so ZPassAwelle). Otherwise only the networks of the highest priority of
+        each ride count: each ride goes to one it shares with another ride (the one of the lowest priority, as in Java),
+        or else to its own (the one of the highest priority)."""
         sets = [self._authorities_of(r) for r in rides]
+        everywhere = set.intersection(*sets)
+        if everywhere:
+            return {max(everywhere, key = lambda a: (a.priority, a.id)).id: list(rides)}
+        sets = [{a for a in s if a.priority == max(b.priority for b in s)} for s in sets]
         frequency = {}
         for s in sets:
             for a in s:
                 frequency[a] = frequency.get(a, 0) + 1
-        everywhere = [a for a, n in frequency.items() if n == len(rides)]
-        if everywhere:
-            return {max(everywhere, key = lambda a: a.priority).id: list(rides)}
         groups = {}
         for ride, s in zip(rides, sets):
             shared = [a for a in s if frequency.get(a, 0) > 1]
