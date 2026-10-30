@@ -1,4 +1,4 @@
 cache/
 __pycache__/
 data/
-config_local.yml
+config_*
