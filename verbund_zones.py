@@ -31,7 +31,8 @@ commute, the trip the subscription is most likely bought for:
    than Zone 10: Geneva - Annemasse, Thonon - Geneva) is covered by a Léman Pass subscription rather than a
    Verbundabo: the cheapest annual one (2nd class, for 6-25 year olds or adults) whose two ends hold the stations of
    the train part of the journey and the zones of the rides before and after it (see gtfs_router.lemanpass). Its
-   Unireso zones stay in verbund_zones. This needs lemanpass.csv and lemanpass_places.csv in the pricing folder.
+   Unireso zones stay in verbund_zones. This needs the fare table of tpg (tpg_<date>_Fare-system_Geneva.xlsx) in the
+   pricing folder.
 
 It writes <out>/verbund_zones.csv, one row per agent with a Verbundabo: its operator and zones, and verbund_zones in
 the format of the subscriptions of route_trips.py and the API ("ZVV:110,121"); subscription (Verbundabo or Léman
@@ -55,7 +56,7 @@ import numpy as np
 import pandas as pd
 
 from gtfs_router import Router
-from gtfs_router.lemanpass import FILES as LEMANPASS_FILES, LemanPass, subscription_profile
+from gtfs_router.lemanpass import subscription_profile
 from gtfs_router.load import add_arguments, default_date, load, routing_cost
 from gtfs_router.pricing import MIN_ZONE_M
 from gtfs_router.tracks import TO_LV95, TO_WGS84
@@ -408,14 +409,6 @@ def commute_zones(home, destination, zones, router, net, pricing, departure = "0
             "journey": journey, "rides": rides}
 
 
-def load_lemanpass(folder, net, zones):
-    """The LemanPass of the pricing folder, or None (with a message) when its inputs are not there."""
-    if folder and all(os.path.exists(os.path.join(folder, f)) for f in LEMANPASS_FILES):
-        return LemanPass(folder, net, zones)
-    logger.info(f"No Léman Pass subscriptions: no {' and '.join(LEMANPASS_FILES)} in {folder} (python -m gtfs_router.lemanpass)")
-    return None
-
-
 def od_matrix(result):
     """The agents by group (zone OD): their number, the share of each method and the most frequent zones."""
     return (result.groupby(["od", "case"], dropna = False)
@@ -456,7 +449,7 @@ def main():
         raise SystemExit("The zones need the prices (--pricing) and the tracks (--network-data, or a network_cache with them)")
     net = feed.on(default_date(feed, args.date))
     router = Router(net, cost = routing_cost(args))
-    lemanpass = load_lemanpass(args.pricing, net, tracks.zones)
+    lemanpass = pricing.lemanpass   # None without the fare table of tpg
 
     # Find the zones and write them.
 

@@ -42,7 +42,7 @@ from gtfs_router.feed import day_of
 from gtfs_router.load import add_arguments, default_date, load, load_simulation
 from gtfs_router.pricing import Traveller, parse_subscriptions
 from scipy.spatial import ConvexHull
-from verbund_zones import commute_zones, load_lemanpass
+from verbund_zones import commute_zones
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MARGIN_S = 5 * 60   # a journey beaten by another one (leaving later, arriving earlier) is still listed if it loses at most this
@@ -178,7 +178,7 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
     stations = Stations(net)
     zones = Zones(net, pricing, tracks) if pricing is not None else None
     # the Léman Pass subscriptions of /api/verbund_zones (the stops are those of the whole feed, the same every date)
-    lemanpass = load_lemanpass(pricing.folder, net, tracks.zones) if pricing is not None and tracks is not None else None
+    lemanpass = pricing.lemanpass if pricing is not None else None
 
     @functools.lru_cache(maxsize = 32)
     def pricing_with(changes):

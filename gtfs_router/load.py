@@ -16,6 +16,7 @@ import pandas as pd
 import yaml
 
 from . import crowding as crowding_module, feed as feed_module, profiles as profiles_module, tracks as tracks_module
+from . import lemanpass as lemanpass_module
 from .crowding import build_crowding
 from .profiles import build_profiles
 from .csa import EARLIEST_ARRIVAL, SWISS_COST
@@ -175,6 +176,7 @@ def load(args):
     --network-data. With --fares, the changes of that file are applied to the prices. The network of a date is
     network.on(date). With the tracks and the communes abroad of --network-data (communes_france.gpkg and
     unireso_france_zones.csv), the stops in these communes without a zone of their network get the zone of their commune.
+    With the tracks and the fare table of tpg in --pricing, the prices include the Léman Pass (pricing.lemanpass).
 
     With --network-cache, the network and the tracks are saved in that file when the GTFS feed is there, and read from
     it when it is not: a server then needs neither the feed nor --network-data, only that file and --pricing."""
@@ -196,6 +198,8 @@ def load(args):
         rows = foreign_stop_zones(net, tracks.zones, *foreign)
         added = pricing.add_stop_zones(zip(rows["stop_id"], rows["network"], rows["zone"]))
         logger.info(f"Zones of the stops abroad: {added} stops of {len(rows)} in the listed communes given the zone of their commune")
+    if tracks is not None:
+        pricing.lemanpass = lemanpass_module.load(args.pricing, net, tracks.zones, args.cache)
     if args.fares:
         with open(args.fares) as f:
             pricing = pricing.with_changes(json.load(f))

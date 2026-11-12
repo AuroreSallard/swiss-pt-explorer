@@ -224,6 +224,14 @@ programming. They are a simplified version of the official tariffs of the Swiss 
   `<distanceBasedDefault>` block prices what belongs to no network (fixed part, price per km, rounding). 
 - `gtfs_zones.csv` tells which fare networks and zones each stop belongs to.
 - `SBB_all_distances.csv` gives the SBB tariff distances between stations.
+- `tpg_<date>_Fare-system_Geneva.xlsx` is the fare table of tpg for the Léman Pass, the tickets across the border
+  around Geneva (optional; it needs the tracks). A journey into its area abroad (a French station, or a Unireso zone
+  other than Zone 10) can also take a Léman Pass single ticket: one ticket for the train part between two Léman Pass
+  stations and the bus and tram rides right before and after it, the other rides priced as usual. The cheaper of the
+  two ways is kept, and the breakdown names the ticket, e.g. `Léman Pass (Zone 10 + Thonon-les-Bains (LEX) + Zone 300)
+  15.70`. The prices are those of the table, in CHF (adult, child 6-15, youth 16-25, 1st or 2nd class); the price
+  editor does not change them. Reading the table takes about 15 s, so what is read is kept in `cache/`. See
+  `gtfs_router/lemanpass.py`.
 
 There are two ways to change them:
 
@@ -414,5 +422,6 @@ those of their stops, and their distance is the sum of the straight-line distanc
 | `gtfs_router/tracks.py`, `zones.py` | The paths of the rides and the zone polygons |
 | `config.yml` | The shared settings; yours go in `config_local.yml` (not in git) |
 | `gtfs_router/load.py` | The settings and command-line options of both scripts, and the loading of the network, prices and tracks |
+| `gtfs_router/lemanpass.py` | The Léman Pass products, from the fare table of tpg (`data/pricing/tpg_..._Fare-system_Geneva.xlsx`) |
 | `data/pricing`, `data/network` | Fare and network inputs |
 | `cache/` | What is built on the first start (not in git) |
