@@ -237,6 +237,21 @@ class Pricing:
             for auth, zone in pairs:
                 self.network_zones.setdefault(auth.id, set()).add(zone)
 
+    def add_stop_zones(self, rows):
+        """Adds zones to stops, from (stop id, network, zone) rows (the stops abroad: zones.foreign_stop_zones). A stop
+        that already has a zone of the network (in gtfs_zones.csv, by its id or its station) keeps it. Returns the
+        number of stops given a zone."""
+        added = 0
+        for stop_id, network, zone in rows:
+            if any(a.id == network for a, _ in self._stop_zones(stop_id)):
+                continue
+            auth = self.authorities.setdefault(network, Authority(network, 1 if "ZPass" in network else 2))
+            self.zones_by_stop.setdefault(stop_id, set()).add((auth, zone))
+            self.network_zones.setdefault(network, set()).add(zone)
+            added += 1
+        self._areas.clear()
+        return added
+
     # ------------------------------------------------------------------ rides
 
     def _stop_zones(self, stop_id):

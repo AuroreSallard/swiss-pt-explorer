@@ -42,7 +42,7 @@ TO_WGS84 = Transformer.from_crs(2056, 4326, always_xy = True)   # and back
 # how far a station looks for its operating points: 400 m, or 2 km if the station is within 150 m of a rail line (a
 # long station whose operating point is at one end)
 STATION_RADIUS_M = (400, 150, 2000)
-VERSION = 7                 # change it when the tracks computed change, so that the old cache files are not used
+VERSION = 8                 # change it when the tracks computed change, so that the old cache files are not used
 DRAW_TOLERANCE_M = 3        # the tracks drawn on the map are simplified to 3 m (not those used for the zones)
 CANDIDATES = 6              # the operating points tried for each station (the nearest can be on another line)
 RAIL_DETOUR = (1.5, 2000)   # a rail path is kept if shorter than 1.5 × the straight line + 2 km
@@ -105,14 +105,17 @@ class Tracks:
         return points
 
 
-def build_tracks(net, pricing, lines_path, municipalities_path, schedule_path = None, matsim_network_path = None, cache_dir = None):
+def build_tracks(net, pricing, lines_path, municipalities_path, schedule_path = None, matsim_network_path = None, cache_dir = None,
+                 foreign_communes_path = None, foreign_zones_path = None):
     """The Tracks of a network (the whole feed).
 
     pricing: the Pricing, for the zones of the stops. lines_path: the SBB rail lines (linie-mit-polygon.geojson).
     municipalities_path: the municipalities and their fare networks (tarifverbundkarte.geojson), for the zone polygons.
+    foreign_communes_path, foreign_zones_path: the communes abroad and their zones (communes_france.gpkg,
+    unireso_france_zones.csv), for the zones outside Switzerland (optional; see zones.py).
     schedule_path, matsim_network_path: the MATSim schedule and network, for the bus routes (optional). cache_dir: where
     the result is kept, and found again as long as the network and all these files are the same."""
-    inputs = [p for p in (lines_path, municipalities_path, schedule_path, matsim_network_path) if p]
+    inputs = [p for p in (lines_path, municipalities_path, schedule_path, matsim_network_path, foreign_communes_path, foreign_zones_path) if p]
     pricing_files = [os.path.join(pricing.folder, f) for f in sorted(os.listdir(pricing.folder))]
     if cache_dir:
         stamp = hashlib.md5(net.stop_ids.tobytes() + net.t_start.tobytes() + net.t_stop.tobytes()).hexdigest()
@@ -213,7 +216,7 @@ def build_tracks(net, pricing, lines_path, municipalities_path, schedule_path = 
     for k in range(len(pairs)):   # the rest: straight lines
         if geometry[k] is None:
             geometry[k] = np.array([xy[a[k]], xy[b[k]]])
-    tracks = _assemble(net, pricing, municipalities_path, seg_of, geometry, source)
+    tracks = _assemble(net, pricing, municipalities_path, seg_of, geometry, source, foreign_communes_path, foreign_zones_path)
 
     if cache_dir:
         os.makedirs(cache_dir, exist_ok = True)
@@ -295,10 +298,10 @@ def _matsim(net, schedule_path, network_path, pairs, a, b, xy, beeline, geometry
     return found
 
 
-def _assemble(net, pricing, municipalities_path, seg_of, geometry, source):
+def _assemble(net, pricing, municipalities_path, seg_of, geometry, source, foreign_communes_path = None, foreign_zones_path = None):
     """The Tracks of the segments: their lengths, the zones they cross (cut with the zone polygons), and their
     simplified coordinates for the map."""
-    zones = zone_polygons(pricing, net, municipalities_path)
+    zones = zone_polygons(pricing, net, municipalities_path, foreign_communes_path, foreign_zones_path)
     lines = gpd.GeoDataFrame(geometry = [shapely.LineString(g) for g in geometry], crs = 2056)
     hits = gpd.sjoin(lines, zones[["network", "zone", "geometry"]], predicate = "intersects")
     inside = shapely.intersection(lines.geometry.values[hits.index.to_numpy()], zones.geometry.values[hits["index_right"].to_numpy()])

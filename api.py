@@ -15,6 +15,11 @@ then open http://localhost:8000. The timetable, prices and simulation are those 
         the fares, as the price editor shows them
   GET /api/networks, GET /api/networks/ZVV/zones
         the fare networks and their zones (names, municipalities, polygons), to choose zone subscriptions
+  GET /api/verbund_zones?home=..&commute=..
+        the zones of the Verbundabo of a person, as verbund_zones.py finds them for the synthetic population
+
+With --compute_verbundabo_zones, the page is the one of web/verbund.html: a map where you place a home and a commute
+destination (optional), and see the zones verbund_zones.py would give the Verbundabo, and the journey they come from.
 
 The parameters of /api/route are described in the docstring of route() below, and at /docs.
 """
@@ -29,6 +34,7 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from gtfs_router import EARLIEST_ARRIVAL, SWISS_COST, Journey, Leg, Router
@@ -36,6 +42,7 @@ from gtfs_router.feed import day_of
 from gtfs_router.load import add_arguments, default_date, load, load_simulation
 from gtfs_router.pricing import Traveller, parse_subscriptions
 from scipy.spatial import ConvexHull
+from verbund_zones import commute_zones, load_lemanpass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MARGIN_S = 5 * 60   # a journey beaten by another one (leaving later, arriving earlier) is still listed if it loses at most this
@@ -152,13 +159,14 @@ class Zones:
 
 
 def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimize_default = "cost", crowding = None, date = None,
-               profiles = None):
+               profiles = None, verbund_page = False):
     """The FastAPI application: the API and the page.
 
     net: the Network of the whole feed (the journeys of a date are routed on net.on(date)). pricing, tracks, crowding,
     profiles: what load() and load_simulation() return (each can be None: the API then goes without it).
     alternatives_max: the most journeys a search returns. optimize_default: "cost" or "time" when a search does not
-    say. date: the date shown first (else today if the timetable has it, else its first day)."""
+    say. date: the date shown first (else today if the timetable has it, else its first day). verbund_page: the page is
+    web/verbund.html, the zones of the Verbundabos, instead of the journey planner."""
     app = FastAPI(title = "GTFS router", description = "Public transport journeys and their prices")
     first_date, last_date = net.dates
     default_day = default_date(net, date)
@@ -169,6 +177,8 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
         return Router(net.on(day))
     stations = Stations(net)
     zones = Zones(net, pricing, tracks) if pricing is not None else None
+    # the Léman Pass subscriptions of /api/verbund_zones (the stops are those of the whole feed, the same every date)
+    lemanpass = load_lemanpass(pricing.folder, net, tracks.zones) if pricing is not None and tracks is not None else None
 
     @functools.lru_cache(maxsize = 32)
     def pricing_with(changes):
@@ -442,6 +452,53 @@ def create_app(net, pricing = None, tracks = None, alternatives_max = 6, optimiz
                 "journeys": [as_json(j, origin, destination, origin_info, destination_info, traveller,
                                      [i for p, i in zip(via_points, via_info) if isinstance(p, tuple)], prices) for j in journeys]}
 
+    @app.get("/api/verbund_zones")
+    def verbund_zones(home: str, commute: Optional[str] = None, date: Optional[str] = None,
+                      time: str = Query("07:30", pattern = r"^\d{1,2}:\d{2}(:\d{2})?$"), age: Optional[int] = Query(None, ge = 0, le = 120)):
+        """The zones of the Verbundabo of a person living at home ("lat,lon") and commuting to commute ("lat,lon"; none:
+        no commute), as verbund_zones.py finds them for the synthetic population: the commute is routed at time on
+        date, and the zones of the network of the subscription along it are kept (for a commute to another network,
+        until the first ride leaving the home network).
+
+        Returns case, operator, home_network, destination_network, home_zone, destination_zone, zones, verbund_zones
+        ("ZVV:110,121") and method (see verbund_zones.py); subscription (Verbundabo, or Léman Pass for a commute into
+        its area abroad), lemanpass (the trip type), lemanpass_annual_chf (2nd class, for age: 6-25 or adult) and
+        lemanpass_needs (what its two ends must hold); journey, the commute (as in /api/route, each ride with
+        "counted": how it counted for the zones), or None when it is not routed; and network_zones, the zones of the
+        operator (as /api/networks/{operator}/zones), each with "selected" when it is in the subscription."""
+        if pricing is None or tracks is None:
+            raise HTTPException(404, "The zones of the Verbundabos need the prices and the tracks")
+        try:
+            day = day_of(date) if date else default_day
+        except ValueError:
+            raise HTTPException(400, f'"{date}" is not a date (YYYY-MM-DD)')
+        if not first_date <= day <= last_date:
+            raise HTTPException(400, f"{iso(day)} is outside the timetable ({iso(first_date)} to {iso(last_date)})")
+        router = router_on(day)
+        home_point, home_info = place(home)
+        commute_point, commute_info = place(commute) if commute else (None, None)
+        if not isinstance(home_point, tuple) or (commute and not isinstance(commute_point, tuple)):
+            raise HTTPException(400, 'home and commute are "lat,lon"')
+        found = commute_zones(home_point, commute_point, tracks.zones, router, router.net, pricing, time,
+                              cost = SWISS_COST if optimize_default == "cost" else EARLIEST_ARRIVAL, lemanpass = lemanpass, age = age)
+        journey, rides = found.pop("journey"), found.pop("rides")
+        if journey is not None:
+            found["journey"] = as_json(journey, home_point, commute_point, home_info, commute_info, None, prices = None)
+            for leg, counted in zip([l for l in found["journey"]["legs"] if l["kind"] == "ride"], rides):
+                leg["counted"] = counted
+        else:
+            found["journey"] = None
+        selected = set(found["zones"])
+        network = zones.networks.get(found["operator"], []) if zones is not None and found["operator"] else []
+        found["network_zones"] = [z | {"selected": z["id"] in selected} for z in network]
+        found["home"], found["commute"] = home_info, commute_info
+        return found
+
+    if verbund_page:
+        @app.get("/", include_in_schema = False)
+        def verbund_index():
+            return FileResponse(os.path.join(HERE, "web", "verbund.html"), headers = {"Cache-Control": "no-cache"})
+
     app.mount("/", _FreshFiles(directory = os.path.join(HERE, "web"), html = True), name = "web")
     return app
 
@@ -473,13 +530,20 @@ def main():
     config = add_arguments(parser)
     parser.add_argument("--host", default = config.get("host") or "127.0.0.1")
     parser.add_argument("--port", type = int, default = config.get("port") or 8000)
+    parser.add_argument("--compute_verbundabo_zones", "--compute-verbundabo-zones", action = "store_true",
+                        help = "Open the page of the zones of the Verbundabos (web/verbund.html) instead of the journey planner")
     args = parser.parse_args()
     logging.basicConfig(level = logging.INFO, format = "%(message)s")
 
     import uvicorn
     crowding, profiles = load_simulation(args)
     app = create_app(*load(args), optimize_default = "cost" if args.routing == "cost" else "time", crowding = crowding, date = args.date,
-                     profiles = profiles)
+                     profiles = profiles, verbund_page = args.compute_verbundabo_zones)
+    if args.compute_verbundabo_zones:   # the page opens in the browser once the server has started
+        import threading
+        import webbrowser
+        url = f"http://{'localhost' if args.host in ('0.0.0.0', '127.0.0.1') else args.host}:{args.port}/"
+        threading.Timer(2.0, webbrowser.open, [url]).start()
     uvicorn.run(app, host = args.host, port = args.port)
 
 

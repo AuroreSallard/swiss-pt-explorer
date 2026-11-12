@@ -69,17 +69,32 @@ def day_of(date):
 
 
 class _Tables:
-    """The .txt tables of a feed, in a zip file or a folder, read as text (no conversion of ids or times)."""
+    """The .txt tables of a feed, in a zip file or a folder, read as text (no conversion of ids or times). The tables can
+    also be in a folder of the zip or of the folder (output/stops.txt..., as data.gtfs.cleaned of eqasim writes them)."""
 
     def __init__(self, path):
         self.path = path
+        self.prefix = ""   # the folder of the tables in the zip (or the folder), "" at its root
+        if os.path.isdir(path):
+            names = [os.path.relpath(os.path.join(d, f), path).replace(os.sep, "/") for d, _, files in os.walk(path) for f in files]
+        else:
+            with zipfile.ZipFile(path) as z:
+                names = z.namelist()
+        stops = sorted((n for n in names if n == "stops.txt" or n.endswith("/stops.txt")), key = lambda n: n.count("/"))
+        if not stops:
+            raise ValueError(f"No stops.txt in the GTFS feed {path}")
+        self.prefix = stops[0][:-len("stops.txt")]
+
+    def _name(self, name):
+        """The path of a table (name without .txt) in the zip or the folder."""
+        return f"{self.prefix}{name}.txt"
 
     def has(self, name):
         """Whether the feed has the table (name without .txt)."""
         if os.path.isdir(self.path):
-            return os.path.exists(os.path.join(self.path, f"{name}.txt"))
+            return os.path.exists(os.path.join(self.path, self._name(name)))
         with zipfile.ZipFile(self.path) as z:
-            return f"{name}.txt" in z.namelist()
+            return self._name(name) in z.namelist()
 
     def read(self, name, usecols = None, chunk_filter = None):
         """A table as a DataFrame of strings. usecols: the columns wanted (the others are not read); chunk_filter: a
@@ -90,8 +105,8 @@ class _Tables:
             return pd.concat([chunk_filter(c) if chunk_filter else c for c in reader], ignore_index = True)
 
         if os.path.isdir(self.path):
-            return read(os.path.join(self.path, f"{name}.txt"))
-        with zipfile.ZipFile(self.path) as z, z.open(f"{name}.txt") as f:
+            return read(os.path.join(self.path, self._name(name)))
+        with zipfile.ZipFile(self.path) as z, z.open(self._name(name)) as f:
             return read(f)
 
 
@@ -109,6 +124,8 @@ def service_calendar(tables):
         cd_day = pd.to_datetime(cd["date"], format = "%Y%m%d")
         ids.append(cd["service_id"])
         bounds += [cd_day.min(), cd_day.max()]
+    if not ids:
+        raise ValueError(f"The GTFS feed {tables.path} has neither calendar.txt nor calendar_dates.txt")
     services = pd.Index(pd.unique(pd.concat(ids, ignore_index = True)))
     first, last = min(bounds), max(bounds)
     days = pd.date_range(first, last)

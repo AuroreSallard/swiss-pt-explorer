@@ -13,6 +13,11 @@ map of the municipalities and the fare networks they belong to (tarifverbundkart
 - a municipality without any stop of the network takes the zone of its neighbour with the longest common border, for
   the networks the map says it is in (and their Z-Pass).
 
+The map has only Swiss municipalities. The zones abroad (the French zones of Unireso) come from a list of communes and
+their zones (unireso_france_zones.csv: insee, commune, zone, and optionally network, else Unireso) and the outlines of
+these communes (communes_france.gpkg: insee, name, geometry). Only the listed communes are in these zones; a commune
+listed in several zones (Pougny: 240 and 250) is split by the nearest of its stops in them.
+
 The polygons are in the Swiss projection (LV95, EPSG:2056), in metres. They are used to find the zones a ride goes
 through (tracks.py), to draw the zones on the map, and to know whether a traveller lives in a network's area.
 """
@@ -30,13 +35,17 @@ NETWORK_NAMES = {"A-Welle": "Awelle", "ONDE VERTE": "OndeVerte", "engadin mobil"
                  "Tarifverbund Schwyz": "TVSZ", "Tarifverbund Zug": "ZVB", "OSTWIND": "Ostwind", "Tarifverbund Davos": "Davos",
                  "Tarifverbund Klosters": "Klosters"}
 MAJORITY = 0.9   # the share of its stops a zone needs for a whole municipality to be in it (else it is split)
+FOREIGN_NETWORK = "Unireso"   # the network of the communes abroad when their list has no network column
 
 
-def zone_polygons(pricing, net, municipalities_path):
+def zone_polygons(pricing, net, municipalities_path, foreign_communes_path = None, foreign_zones_path = None):
     """The zone polygons, as a GeoDataFrame with one row per zone of each network: network, zone, geometry,
-    municipalities (the names of the municipalities in it, the one with the most stops first) and name (that first one)."""
+    municipalities (the names of the municipalities in it, the one with the most stops first) and name (that first one).
+
+    foreign_communes_path, foreign_zones_path: the outlines of communes abroad and the list of their zones, for the
+    zones outside Switzerland (both needed; see the top of this module)."""
     towns = gpd.read_file(municipalities_path).to_crs(2056)[["id", "name", "partners", "geometry"]]
-    towns["networks"] = towns["partners"].map(lambda p: {NETWORK_NAMES.get(x.strip(), x.strip()) for x in (p or "").split(",") if x.strip()})
+    towns["networks"] = towns["partners"].map(lambda p: {NETWORK_NAMES.get(x.strip(), x.strip()) for x in (p if isinstance(p, str) else "").split(",") if x.strip()})
 
     # the stops with one zone in a network, and the stops at the border of zones (several zones in the same network)
     rows, border_rows = [], []
@@ -48,12 +57,15 @@ def zone_polygons(pricing, net, municipalities_path):
         rows += [(s, n, next(iter(z))) for n, z in by_network.items() if len(z) == 1]
         border_rows += [(s, n, z) for n, z in by_network.items() if len(z) > 1]
 
-    def located(rows, columns):
-        """The rows (one per stop) with the position of their stop and the municipality it is in (column id)."""
+    def placed(rows, columns):
+        """The rows (one per stop) with the position of their stop."""
         table = pd.DataFrame(rows, columns = columns)
         points = gpd.GeoSeries(gpd.points_from_xy(net.stop_lon[table["stop"]], net.stop_lat[table["stop"]]), crs = 4326).to_crs(2056)
-        table = gpd.GeoDataFrame(table, geometry = points.values, crs = 2056)
-        return gpd.sjoin(table, towns[["id", "geometry"]], predicate = "within").drop(columns = "index_right")
+        return gpd.GeoDataFrame(table, geometry = points.values, crs = 2056)
+
+    def located(rows, columns):
+        """The rows (one per stop) with the position of their stop and the municipality it is in (column id)."""
+        return gpd.sjoin(placed(rows, columns), towns[["id", "geometry"]], predicate = "within").drop(columns = "index_right")
     stops = located(rows, ["stop", "network", "zone"])
     border = located(border_rows, ["stop", "network", "zones"])
 
@@ -69,12 +81,24 @@ def zone_polygons(pricing, net, municipalities_path):
             pieces.append((town, network, zone, shapes[town]))
             continue
         split += 1   # the town by the nearest stop of the network
-        inside = stops[(stops["id"] == town) & (stops["network"] == network)].drop_duplicates("geometry")
-        cells = shapely.voronoi_polygons(shapely.multipoints(inside.geometry.values), extend_to = shapes[town])
-        cells = gpd.GeoDataFrame(geometry = list(shapely.get_parts(cells)), crs = 2056)
-        cells = gpd.sjoin(cells, inside[["zone", "geometry"]], predicate = "contains")
-        for z, cell in cells.dissolve("zone").geometry.items():
-            pieces.append((town, network, z, cell.intersection(shapes[town])))
+        inside = stops[(stops["id"] == town) & (stops["network"] == network)]
+        pieces += [(town, network, z, cell) for z, cell in _split_by_stops(shapes[town], inside)]
+
+    # the communes abroad, in the zones of their list: all of a commune in its zone, or, listed in several zones, split
+    # by the nearest of its stops in them; when these stops are all in one of the zones (Pougny: 240), all of it in that
+    # zone, and without such stops, in the first zone listed
+    abroad = _foreign_communes(foreign_communes_path, foreign_zones_path)
+    if len(abroad):
+        every = placed(rows, ["stop", "network", "zone"])
+        for (town, network), group in abroad.groupby(["id", "network"], sort = False):
+            shape, listed = group.geometry.iloc[0], sorted(group["zone"])
+            inside = every[(every["network"] == network) & every["zone"].isin(listed)]
+            inside = inside[inside.within(shape)]
+            if len(listed) == 1 or inside["zone"].nunique() < 2:
+                pieces.append((town, network, inside["zone"].iloc[0] if len(inside) else listed[0], shape))
+            else:
+                pieces += [(town, network, z, cell) for z, cell in _split_by_stops(shape, inside)]
+        logger.info(f"  {abroad['id'].nunique()} communes abroad in {abroad[['network', 'zone']].drop_duplicates().shape[0]} zones")
 
     # the towns with only stops at the border of zones (Wichtrach, Libero 626 and 710): the border goes through them.
     # A grid of points covers the town, each point goes to the nearest of these zones (as drawn so far), and the town is
@@ -130,7 +154,8 @@ def zone_polygons(pricing, net, municipalities_path):
 
     # the pieces merged into one polygon per zone, named after their municipalities (the one with the most stops first)
     result = gpd.GeoDataFrame(pd.DataFrame(pieces, columns = ["id", "network", "zone", "geometry"]), crs = 2056)
-    result["town"] = result["id"].map(towns.set_index("id")["name"])
+    names_of = pd.concat([towns.set_index("id")["name"], abroad.drop_duplicates("id").set_index("id")["name"]])
+    result["town"] = result["id"].map(names_of)
     counts = stops.groupby(["network", "zone", "id"]).size().rename("stops")
     result = result.join(counts, on = ["network", "zone", "id"]).fillna({"stops": 0})
     names = result.sort_values("stops", ascending = False).groupby(["network", "zone"])["town"].agg(lambda t: list(dict.fromkeys(t)))
@@ -141,3 +166,51 @@ def zone_polygons(pricing, net, municipalities_path):
     logger.info(f"  {len(result)} zone polygons: {len(best)} municipality-network pairs from their stops ({split} split by stop), "
                 f"{between} split between the zones of their border stops, {filled} from a neighbour")
     return result
+
+
+def _split_by_stops(shape, stops):
+    """A place split by the zone of its nearest stop (the Voronoi cells of the stops): [(zone, geometry)]. stops: a
+    GeoDataFrame of the stops with their zone (EPSG:2056)."""
+    stops = stops.drop_duplicates("geometry")
+    cells = shapely.voronoi_polygons(shapely.multipoints(stops.geometry.values), extend_to = shape)
+    cells = gpd.GeoDataFrame(geometry = list(shapely.get_parts(cells)), crs = 2056)
+    cells = gpd.sjoin(cells, stops[["zone", "geometry"]], predicate = "contains")
+    return [(z, cell.intersection(shape)) for z, cell in cells.dissolve("zone").geometry.items()]
+
+
+def _foreign_communes(communes_path, zones_path):
+    """The communes abroad and their zones, one row per commune and zone: id ("FR" and the INSEE code), name, network,
+    zone and geometry (EPSG:2056); empty without both files. A listed commune without an outline is left out, with a
+    warning."""
+    if not (communes_path and zones_path):
+        return gpd.GeoDataFrame({"id": [], "name": [], "network": [], "zone": []}, geometry = [], crs = 2056)
+    listed = pd.read_csv(zones_path, dtype = str).apply(lambda s: s.str.strip())
+    if "network" not in listed:
+        listed["network"] = FOREIGN_NETWORK
+    communes = gpd.read_file(communes_path).to_crs(2056)[["insee", "name", "geometry"]]
+    missing = sorted(set(listed["insee"]) - set(communes["insee"]))
+    if missing:
+        logger.warning(f"  {len(missing)} communes of {zones_path} have no outline in {communes_path}: {', '.join(missing)}")
+    result = communes.merge(listed[["insee", "network", "zone"]], on = "insee")
+    result["id"] = "FR" + result["insee"]
+    return result[["id", "name", "network", "zone", "geometry"]]
+
+
+def foreign_stop_zones(net, zones, communes_path, zones_path):
+    """The zones of the stops in the communes abroad, as a DataFrame stop_id, network, zone: the zone of the commune of
+    each stop, or, for a commune listed in several zones, the one whose polygon (of zones, the zone polygons) holds the
+    stop (else the first listed). Empty without both files."""
+    abroad = _foreign_communes(communes_path, zones_path)
+    if not len(abroad):
+        return pd.DataFrame({"stop_id": [], "network": [], "zone": []})
+    points = gpd.GeoDataFrame({"stop_id": net.stop_ids.astype(str)},
+                              geometry = gpd.GeoSeries(gpd.points_from_xy(net.stop_lon, net.stop_lat), crs = 4326).to_crs(2056).values, crs = 2056)
+    hits = gpd.sjoin(points, abroad[["network", "zone", "geometry"]], predicate = "within").drop(columns = "index_right")
+    several = hits.duplicated(["stop_id", "network"], keep = False)
+    if several.any():   # a commune in several zones: the zone whose polygon holds the stop
+        inside = gpd.sjoin(hits[several].drop(columns = "zone"), zones[["network", "zone", "geometry"]], predicate = "within")
+        inside = inside[inside["network_left"] == inside["network_right"]].rename(columns = {"network_left": "network"})
+        chosen = hits[several].merge(inside[["stop_id", "network", "zone"]], on = ["stop_id", "network", "zone"])
+        first = hits[several].sort_values("zone").drop_duplicates(["stop_id", "network"])
+        hits = pd.concat([hits[~several], chosen, first]).drop_duplicates(["stop_id", "network"])
+    return pd.DataFrame(hits[["stop_id", "network", "zone"]]).reset_index(drop = True)

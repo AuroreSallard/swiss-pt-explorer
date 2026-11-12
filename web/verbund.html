@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verbundabo zones</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root { --ink: #1d2433; --muted: #5f6b7a; --line: #d9dee5; --home: #c0392b; --commute: #1f5fbf; --zone: #0f8a5f; --exit: #d97706; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); }
+  body { display: flex; }
+  #panel { width: 400px; max-width: 45vw; height: 100%; overflow-y: auto; padding: 16px 18px; border-right: 1px solid var(--line); background: #fff; }
+  #map { flex: 1; height: 100%; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  .place { position: relative; display: flex; gap: 6px; }
+  .place input { flex: 1; min-width: 0; }
+  input, button { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+  button { background: #f4f6f9; cursor: pointer; white-space: nowrap; }
+  button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+  .suggest { position: absolute; top: 100%; left: 0; right: 0; z-index: 1000; background: #fff; border: 1px solid var(--line);
+             border-radius: 6px; margin-top: 2px; box-shadow: 0 4px 12px rgba(0,0,0,.12); }
+  .suggest div { padding: 6px 8px; cursor: pointer; }
+  .suggest div:hover { background: #f0f3f7; }
+  .row { display: flex; gap: 8px; }
+  .row > div { flex: 1; }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+  #result { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .abo { font-size: 20px; font-weight: 700; margin: 2px 0 6px; }
+  .abo code { font-size: 13px; font-weight: 400; background: #f4f6f9; padding: 2px 6px; border-radius: 4px; cursor: copy; }
+  .case { background: #f4f6f9; border-radius: 6px; padding: 8px 10px; margin: 8px 0; }
+  table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+  td { padding: 3px 4px; vertical-align: top; border-bottom: 1px solid #eef1f4; }
+  td:first-child { color: var(--muted); white-space: nowrap; }
+  .legs { margin-top: 10px; }
+  .leg { padding: 6px 0 6px 10px; border-left: 4px solid #ccc; margin: 4px 0; }
+  .leg .t { color: var(--muted); font-size: 12.5px; }
+  .tag { display: inline-block; font-size: 11.5px; padding: 0 6px; border-radius: 9px; margin-left: 4px; color: #fff; }
+  .error { color: #b00020; }
+  .legend { background: #fff; padding: 6px 8px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.2); font-size: 12px; line-height: 1.6; }
+  .legend i { display: inline-block; width: 18px; height: 0; border-top: 4px solid; margin-right: 6px; vertical-align: middle; }
+  a { color: var(--commute); }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>Verbundabo zones</h1>
+  <p class="sub">The zones <code>verbund_zones.py</code> gives a Verbundabo, for a home and an optional commute place.</p>
+
+  <label><span class="dot" style="background:var(--home)"></span>Home</label>
+  <div class="place">
+    <input id="home-q" placeholder="Address, or click on the map" autocomplete="off">
+    <button id="home-pick" class="on" title="The next click on the map places the home">Pick</button>
+    <div class="suggest" id="home-s" hidden></div>
+  </div>
+
+  <label><span class="dot" style="background:var(--commute)"></span>Work or education place (optional)</label>
+  <div class="place">
+    <input id="commute-q" placeholder="Address, or click on the map" autocomplete="off">
+    <button id="commute-pick" title="The next click on the map places the commute destination">Pick</button>
+    <button id="commute-clear" title="No commute: the home zone only">✕</button>
+    <div class="suggest" id="commute-s" hidden></div>
+  </div>
+
+  <div class="row">
+    <div><label for="date">Date</label><input id="date" type="date" style="width:100%"></div>
+    <div><label for="time">Departure</label><input id="time" type="time" value="07:30" style="width:100%"></div>
+  </div>
+  <p class="hint">Click the map to place the selected point; drag the markers to move them. verbund_zones.py routes the
+    commutes on 17.03.2026 at 07:30 by default.</p>
+
+  <div id="result"><p class="hint">Place a home to start.</p></div>
+  <p class="hint" style="margin-top:18px"><a href="/index.html">Journey planner</a></p>
+</div>
+<div id="map"></div>
+
+<script>
+const CASES = {
+  outside: "Neither the home nor the commute place is in a fare network: no Verbundabo zones.",
+  destination: "The home is in no fare network, the commute place is: the zones of the network of the commute place along the commute, back from it to the ride that enters the network.",
+  home: "No commute: the zone of the home.",
+  same_zone: "Home and commute place in the same zone: that zone.",
+  intra: "Home and commute place in two zones of the same network: the zones of that network along the commute.",
+  zpass: "Two networks joined by a Z-Pass: the Z-Pass zones along the commute.",
+  inter: "Two networks: the zones of the home network along the commute, until the first ride that leaves it (where the SBB or another network takes over).",
+};
+const METHODS = {
+  own_route: "the zones along the routed commute, plus the home zone",
+  home_zone: "the home zone", same_zone: "the home zone",
+  fallback: "no journey found: the home and destination zones", none: "none",
+};
+const ROLES = {
+  in_network: ["counted", "var(--zone)"], leaves_network: ["leaves the network: boarding zone only", "var(--exit)"],
+  enters_network: ["enters the network: alighting zone only", "var(--exit)"],
+  partly_in_network: ["partly in the network", "var(--exit)"], after_exit: ["not counted", "#9aa3ad"], before_entry: ["not counted", "#9aa3ad"],
+};
+
+const map = L.map("map", {zoomControl: true}).setView([46.8, 8.2], 8);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+const zoneLayer = L.layerGroup().addTo(map), journeyLayer = L.layerGroup().addTo(map);
+const legend = L.control({position: "bottomright"});
+legend.onAdd = () => {
+  const d = L.DomUtil.create("div", "legend");
+  d.innerHTML = '<div><i style="border-color:var(--zone)"></i>ride in the network (counted)</div>' +
+    '<div><i style="border-color:var(--exit);border-top-style:dashed"></i>leaves (or enters) the network</div>' +
+    '<div><i style="border-color:#9aa3ad"></i>not counted</div>' +
+    '<div><i style="border-color:#555;border-top-style:dotted"></i>walk</div>';
+  return d;
+};
+legend.addTo(map);
+
+const icon = color => L.divIcon({className: "", iconSize: [18, 18], iconAnchor: [9, 9],
+  html: `<div style="width:18px;height:18px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35)"></div>`});
+const points = {home: null, commute: null};
+const markers = {home: null, commute: null};
+let picking = "home";
+
+function setPicking(which) {
+  picking = which;
+  document.getElementById("home-pick").classList.toggle("on", which === "home");
+  document.getElementById("commute-pick").classList.toggle("on", which === "commute");
+}
+document.getElementById("home-pick").onclick = () => setPicking("home");
+document.getElementById("commute-pick").onclick = () => setPicking("commute");
+document.getElementById("commute-clear").onclick = () => { setPoint("commute", null); document.getElementById("commute-q").value = ""; };
+
+function setPoint(which, latlng, label) {
+  points[which] = latlng;
+  if (markers[which]) { map.removeLayer(markers[which]); markers[which] = null; }
+  if (latlng) {
+    markers[which] = L.marker(latlng, {draggable: true, icon: icon(which === "home" ? "var(--home)" : "var(--commute)")}).addTo(map);
+    markers[which].on("dragend", e => { points[which] = e.target.getLatLng(); document.getElementById(which + "-q").value = fmt(points[which]); update(); });
+    document.getElementById(which + "-q").value = label || fmt(latlng);
+  }
+  update();
+}
+const fmt = p => `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`;
+
+map.on("click", e => {
+  setPoint(picking, e.latlng);
+  if (picking === "home" && !points.commute) setPicking("commute");
+});
+
+// address search (Photon), as on the journey planner
+for (const which of ["home", "commute"]) {
+  const input = document.getElementById(which + "-q"), box = document.getElementById(which + "-s");
+  let timer = null, ctrl = null;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    const coords = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+    if (coords) { box.hidden = true; return; }
+    if (q.length < 3) { box.hidden = true; return; }
+    timer = setTimeout(async () => {
+      if (ctrl) ctrl.abort();
+      ctrl = new AbortController();
+      const c = map.getCenter();
+      try {
+        const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&lat=${c.lat}&lon=${c.lng}`, {signal: ctrl.signal});
+        const features = (await r.json()).features || [];
+        box.innerHTML = "";
+        for (const f of features) {
+          const p = f.properties, [lon, lat] = f.geometry.coordinates;
+          const name = [p.name, p.street && (p.street + (p.housenumber ? " " + p.housenumber : "")), p.postcode, p.city].filter(Boolean).join(", ");
+          const item = document.createElement("div");
+          item.textContent = name;
+          item.onclick = () => { box.hidden = true; setPoint(which, L.latLng(lat, lon), name); map.setView([lat, lon], Math.max(map.getZoom(), 12)); };
+          box.appendChild(item);
+        }
+        box.hidden = !features.length;
+      } catch (e) { if (e.name !== "AbortError") box.hidden = true; }
+    }, 250);
+  });
+  input.addEventListener("keydown", e => {
+    if (e.key !== "Enter") return;
+    const coords = input.value.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+    if (coords) { setPoint(which, L.latLng(+coords[1], +coords[2])); box.hidden = true; }
+    else if (box.firstChild) box.firstChild.click();
+  });
+  input.addEventListener("blur", () => setTimeout(() => box.hidden = true, 200));
+}
+document.getElementById("date").onchange = update;
+document.getElementById("time").onchange = update;
+
+fetch("/api/info").then(r => r.json()).then(info => {
+  const d = document.getElementById("date");
+  d.min = info.first_date; d.max = info.last_date;
+  d.value = info.first_date <= "2026-03-17" && "2026-03-17" <= info.last_date ? "2026-03-17" : info.date;
+});
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let pending = null;
+
+async function update() {
+  const out = document.getElementById("result");
+  if (!points.home) { out.innerHTML = '<p class="hint">Place a home to start.</p>'; zoneLayer.clearLayers(); journeyLayer.clearLayers(); return; }
+  const params = new URLSearchParams({home: `${points.home.lat},${points.home.lng}`});
+  if (points.commute) params.set("commute", `${points.commute.lat},${points.commute.lng}`);
+  const date = document.getElementById("date").value, time = document.getElementById("time").value;
+  if (date) params.set("date", date);
+  if (time) params.set("time", time);
+  out.innerHTML = '<p class="hint">Computing…</p>';
+  if (pending) pending.abort();
+  pending = new AbortController();
+  let data;
+  try {
+    const r = await fetch("/api/verbund_zones?" + params, {signal: pending.signal});
+    data = await r.json();
+    if (!r.ok) throw new Error(data.detail || r.statusText);
+  } catch (e) {
+    if (e.name === "AbortError") return;
+    out.innerHTML = `<p class="error">${esc(e.message)}</p>`;
+    return;
+  }
+  render(data);
+}
+
+function render(d) {
+  zoneLayer.clearLayers();
+  journeyLayer.clearLayers();
+
+  // the zones of the operator: all outlined, those of the subscription filled
+  const selectedBounds = [];
+  for (const z of d.network_zones) {
+    for (const poly of z.polygons) {
+      const layer = L.polygon(poly, z.selected
+        ? {color: "#0f8a5f", weight: 2, fillColor: "#0f8a5f", fillOpacity: 0.28}
+        : {color: "#7a8796", weight: 1, fillOpacity: 0.03, dashArray: "3 3"});
+      layer.bindTooltip(`${esc(d.operator)} ${esc(z.id)}: ${esc(z.name)}`, {sticky: true});
+      layer.addTo(zoneLayer);
+      if (z.selected) selectedBounds.push(layer.getBounds());
+    }
+    if (z.selected) L.marker(z.center, {interactive: false, icon: L.divIcon({className: "", iconSize: [40, 16], iconAnchor: [20, 8],
+      html: `<div style="font-weight:700;color:#0b5d40;text-align:center;text-shadow:0 0 3px #fff,0 0 3px #fff">${esc(z.id)}</div>`})}).addTo(zoneLayer);
+  }
+
+  // the commute, each ride coloured by how it counted
+  const legsHtml = [];
+  if (d.journey) {
+    for (const leg of d.journey.legs) {
+      if (leg.kind === "walk") {
+        L.polyline(leg.path, {color: "#555", weight: 3, dashArray: "2 6"}).addTo(journeyLayer);
+        legsHtml.push(`<div class="leg" style="border-color:#bbb"><div>Walk ${leg.duration_min} min</div>
+          <div class="t">${esc(leg.from.name)} → ${esc(leg.to.name)}</div></div>`);
+      } else if (leg.kind === "ride") {
+        const [label, color] = ROLES[leg.counted?.role] || ["", "#555"];
+        L.polyline(leg.path, {color, weight: 5, opacity: 0.9, dashArray: ["leaves_network", "enters_network"].includes(leg.counted?.role) ? "8 6" : null})
+          .bindTooltip(`${esc(leg.line)}: ${esc(label)}`, {sticky: true}).addTo(journeyLayer);
+        const zones = leg.counted?.zones?.length ? ` · zones ${leg.counted.zones.map(esc).join(", ")}` : "";
+        legsHtml.push(`<div class="leg" style="border-color:${color}"><div><b>${esc(leg.line)}</b> ${esc(leg.dep)}–${esc(leg.arr)}
+          <span class="tag" style="background:${color}">${esc(label)}</span></div>
+          <div class="t">${esc(leg.from.name)} → ${esc(leg.to.name)}${zones}</div></div>`);
+      }
+    }
+  }
+
+  const lp = d.lemanpass
+    ? `<div class="case" style="border-left:4px solid var(--commute)"><b>Léman Pass subscription</b>: ${esc(d.lemanpass)}
+       <div>CHF ${d.lemanpass_annual_chf.toFixed(2)} a year (2nd class, adult)</div>
+       <div class="hint" style="margin:4px 0 0">The commute goes into the Léman Pass area abroad, so it is covered by a Léman Pass rather than a
+       Verbundabo. Its ends must hold: ${d.lemanpass_needs.map(n => n.map(esc).join(", ")).join(" → ")}. The Unireso zones below are those it covers.</div></div>`
+    : "";
+  const abo = d.zones.length
+    ? `<div class="abo">${esc(d.operator)}: ${d.zones.map(esc).join(", ")}</div>
+       <div><code title="Click to copy" onclick="navigator.clipboard.writeText(this.textContent)">${esc(d.verbund_zones)}</code>
+       · ${d.zones.length} zone${d.zones.length > 1 ? "s" : ""}</div>`
+    : `<div class="abo">No zones</div>`;
+  const row = (k, v) => v ? `<tr><td>${k}</td><td>${v}</td></tr>` : "";
+  document.getElementById("result").innerHTML = `${lp}${abo}
+    <div class="case"><b>${esc(d.case)}</b>: ${esc(CASES[d.case] || "")}</div>
+    <table>
+      ${row("Home", `${esc(d.home_network || "no network")}${d.home_zone && d.case !== "zpass" ? " " + esc(d.home_zone) : ""}`)}
+      ${d.commute ? row("Commute place", `${esc(d.destination_network || "no network")}${d.case !== "zpass" && d.destination_zone ? " " + esc(d.destination_zone) : ""}`) : ""}
+      ${d.case === "zpass" ? row("Z-Pass zones", `home ${esc(d.home_zone)}, commute ${esc(d.destination_zone)}`) : ""}
+      ${row("Zones from", esc(METHODS[d.method] || d.method))}
+      ${d.journey ? row("Commute", `${esc(d.journey.dep)}–${esc(d.journey.arr)}, ${d.journey.duration_min} min, ${d.journey.changes} change${d.journey.changes === 1 ? "" : "s"}`) : ""}
+    </table>
+    ${legsHtml.length ? `<div class="legs">${legsHtml.join("")}</div>` : ""}`;
+
+  // keep the places, the zones and the journey in view
+  let bounds = L.latLngBounds([points.home]);
+  if (points.commute) bounds.extend(points.commute);
+  for (const b of selectedBounds) bounds.extend(b);
+  journeyLayer.eachLayer(l => l.getBounds && bounds.extend(l.getBounds()));
+  if (!map.getBounds().contains(bounds)) map.fitBounds(bounds.pad(0.15), {maxZoom: 13});
+}
+</script>
+</body>
+</html>

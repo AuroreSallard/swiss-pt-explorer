@@ -326,8 +326,13 @@ The same goes for the timetable and the network data, with `network_cache` (e.g.
 Switzerland): where the GTFS feed is, each start saves the network and the tracks in that file (again only when the
 feed, the network data, the pricing inputs or the code change); where it is not, they are read from it.
 
-`config_cache_only.yml` has the settings of a server with only these two files and `data/pricing`: copy it there as
-`config_local.yml`, with `cache/network.pkl` and `cache/simulation.pkl`.
+A server then needs only these two files and the fare inputs (`data/pricing`, read at each start and not in git), with
+this `config_local.yml` (`gtfs` and `crowding` are empty in `config.yml`, and `pricing` is `data/pricing`):
+
+```yaml
+network_cache: cache/network.pkl
+crowding_cache: cache/simulation.pkl
+```
 
 ### Who the other passengers are
 

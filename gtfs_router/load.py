@@ -22,13 +22,15 @@ from .csa import EARLIEST_ARRIVAL, SWISS_COST
 from .feed import build_network, day_of
 from .pricing import Pricing
 from .tracks import build_tracks
+from .zones import foreign_stop_zones
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILES = ("config.yml", "config_local.yml")   # in this order: the keys of config_local.yml (not in git) replace the others
 PATHS = ("gtfs", "pricing", "network_data", "fares", "crowding", "crowding_cache", "network_cache", "cache")   # the settings that are paths
-# the files of the network data folder: the municipalities and their fare networks, the SBB rail lines, and the MATSim
-# schedule and network (for the bus routes)
+# the files of the network data folder: the municipalities and their fare networks, the SBB rail lines, the French
+# communes and their Unireso zones (optional), and the MATSim schedule and network (for the bus routes)
 NETWORK_FILES = {"municipalities": "tarifverbundkarte.geojson", "lines": "linie-mit-polygon.geojson",
+                 "foreign_communes": "communes_france.gpkg", "foreign_zones": "unireso_france_zones.csv",
                  "schedule": "corrected_schedule.xml.gz", "matsim_network": "corrected_network.xml.gz"}
 logger = logging.getLogger(__name__)
 
@@ -171,7 +173,8 @@ def load(args):
 
     There are no prices without --pricing, and no tracks without the rail lines and the municipalities in
     --network-data. With --fares, the changes of that file are applied to the prices. The network of a date is
-    network.on(date).
+    network.on(date). With the tracks and the communes abroad of --network-data (communes_france.gpkg and
+    unireso_france_zones.csv), the stops in these communes without a zone of their network get the zone of their commune.
 
     With --network-cache, the network and the tracks are saved in that file when the GTFS feed is there, and read from
     it when it is not: a server then needs neither the feed nor --network-data, only that file and --pricing."""
@@ -188,6 +191,11 @@ def load(args):
     if not args.pricing:
         return net, None, None
     pricing = Pricing(args.pricing, tracks = tracks)
+    foreign = [os.path.join(args.network_data, NETWORK_FILES[k]) for k in ("foreign_communes", "foreign_zones")] if args.network_data else []
+    if tracks is not None and foreign and all(os.path.exists(p) for p in foreign):
+        rows = foreign_stop_zones(net, tracks.zones, *foreign)
+        added = pricing.add_stop_zones(zip(rows["stop_id"], rows["network"], rows["zone"]))
+        logger.info(f"Zones of the stops abroad: {added} stops of {len(rows)} in the listed communes given the zone of their commune")
     if args.fares:
         with open(args.fares) as f:
             pricing = pricing.with_changes(json.load(f))
@@ -203,7 +211,8 @@ def _build_network_and_tracks(args):
     tracks = None
     if args.pricing and "lines" in files and "municipalities" in files:
         tracks = build_tracks(net, Pricing(args.pricing), files["lines"], files["municipalities"], files.get("schedule"), files.get("matsim_network"),
-                              cache_dir = args.cache)
+                              cache_dir = args.cache, foreign_communes_path = files.get("foreign_communes"),
+                              foreign_zones_path = files.get("foreign_zones"))
     if args.network_cache:
         inputs = [args.gtfs] + sorted(files.values()) + ([os.path.join(args.pricing, f) for f in sorted(os.listdir(args.pricing))] if tracks else [])
         stamp = (f"{feed_module.VERSION}|{tracks_module.VERSION}|"
